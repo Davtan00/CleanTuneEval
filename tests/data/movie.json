@@ -1,0 +1,512 @@
+{  "domain": "movie_reviews",
+   "generated_data": [
+       {
+           "id": 1,
+           "text": "This movie was absolutely fantastic! The acting and cinematography were top-notch.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 2,
+           "text": "I really enjoyed the plot twist at the end. It kept me on the edge of my seat!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 3,
+           "text": "A beautifully crafted film that resonates with deep emotions. Highly recommend!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 4,
+           "text": "The soundtrack was mesmerizing and added so much depth to the story.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 5,
+           "text": "An inspiring story that left me feeling uplifted and hopeful.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 6,
+           "text": "The character development was impressive, and I felt a connection to each one.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 7,
+           "text": "Great direction and an engaging screenplay. I would watch it again!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 8,
+           "text": "The humor was perfectly timed, making for a delightful viewing experience.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 9,
+           "text": "A heartwarming tale with stunning visuals. Truly a masterpiece.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 10,
+           "text": "The performances were outstanding, especially from the lead actor.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 11,
+           "text": "It was a decent film, nothing too special but enjoyable enough.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 12,
+           "text": "The pacing was a bit slow in parts, but it had some redeeming qualities.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 13,
+           "text": "I found the movie to be average. It didn't stand out in any way.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 14,
+           "text": "There were some interesting moments, but overall it felt lackluster.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 15,
+           "text": "The plot had potential, but it didn’t quite deliver as expected.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 16,
+           "text": "This film exists in the realm of mediocrity. Not bad, not great.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 17,
+           "text": "Some scenes were enjoyable, yet others dragged on without purpose.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 18,
+           "text": "It was okay; I didn’t regret watching it but wouldn’t recommend it either.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 19,
+           "text": "The movie had its moments but ultimately felt forgettable.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 20,
+           "text": "I was indifferent to this movie. It didn't resonate with me at all.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 21,
+           "text": "A typical film that follows the usual tropes. Nothing new to see here.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 22,
+           "text": "I expected more from this movie, as it was just a mediocre experience.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 23,
+           "text": "The plot was confusing and poorly executed. I lost interest halfway through.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 24,
+           "text": "Unfortunately, this movie fell flat. I wouldn't recommend it to anyone.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 25,
+           "text": "The characters were one-dimensional and lacked any depth or development.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 26,
+           "text": "I left the theater disappointed. It was a waste of time and money.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 27,
+           "text": "The dialogue felt forced and unnatural, which detracted from the story.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 28,
+           "text": "This film was a chore to sit through. I found myself checking my watch often.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 29,
+           "text": "The special effects were subpar, making it hard to take the film seriously.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 30,
+           "text": "I had high hopes for this movie, but it turned out to be a complete letdown.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 31,
+           "text": "The pacing was terrible, dragging on when it should have been engaging.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 32,
+           "text": "Unfortunately, I can't say anything good about this film; it was quite terrible.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 33,
+           "text": "An unoriginal story that fails to captivate the audience. Very disappointing.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 34,
+           "text": "I found the acting to be lackluster and uninspired throughout the film.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 35,
+           "text": "This movie tried too hard to be profound but ended up being pretentious instead.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 36,
+           "text": "The script was poorly written, leading to a disjointed viewing experience.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 37,
+           "text": "I couldn't connect with any of the characters; they were all unlikable.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 38,
+           "text": "A series of clichés without any fresh ideas. Very disappointing watch.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 39,
+           "text": "This film missed the mark on so many levels; I regret watching it.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 40,
+           "text": "The ending was predictable and left me feeling unsatisfied. Not worth my time.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 41,
+           "text": "The cinematography was stunning and really brought the story to life.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 42,
+           "text": "I enjoyed the performances, but the plot felt a bit predictable.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 43,
+           "text": "The movie was a complete waste of time; I couldn't wait for it to end.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 44,
+           "text": "A heartwarming tale with great humor; definitely worth watching!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 45,
+           "text": "The pacing was uneven, making it hard to stay engaged at times.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 46,
+           "text": "Terrible script and awful acting; I wouldn't recommend this film to anyone.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 47,
+           "text": "An absolute masterpiece! The storytelling was exceptional.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 48,
+           "text": "It had some good moments, but overall it was just okay.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 49,
+           "text": "This is one of the worst movies I've ever seen; I regret watching it.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 50,
+           "text": "The soundtrack was fantastic and really enhanced the emotional scenes.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 51,
+           "text": "I felt indifferent about the characters; they lacked depth.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 52,
+           "text": "Poor direction and lack of coherence made it unbearable to watch.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 53,
+           "text": "A delightful film that left me smiling; I loved it!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 54,
+           "text": "The special effects were impressive, but the storyline was lacking.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 55,
+           "text": "The acting was subpar and the plot was nonsensical; a total flop.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 56,
+           "text": "An engaging and thought-provoking film that stayed with me long after.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 57,
+           "text": "Some interesting themes, but not executed well enough for my liking.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 58,
+           "text": "This film is a disgrace to cinema; it's that bad.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 59,
+           "text": "A beautiful love story that is both touching and relatable.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 60,
+           "text": "While it had potential, it ultimately felt like a missed opportunity.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 61,
+           "text": "The plot was convoluted and made no sense; very disappointing.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 62,
+           "text": "An exhilarating ride from start to finish; I highly recommend it!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 63,
+           "text": "The film had its moments, but it didn't quite resonate with me.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 64,
+           "text": "What a boring movie! I struggled to keep my eyes open.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 65,
+           "text": "A captivating performance by the lead actor; truly impressive!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 66,
+           "text": "The dialogue felt forced and unnatural; it could have been better.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 67,
+           "text": "Absolutely terrible! The plot holes were so distracting.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 68,
+           "text": "Such a refreshing take on the genre; I loved every minute of it!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 69,
+           "text": "It was fine, but I probably won't watch it again.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 70,
+           "text": "This movie had no redeeming qualities whatsoever; very poorly made.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 71,
+           "text": "A brilliant blend of humor and drama that kept me invested throughout.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 72,
+           "text": "I felt mixed about the ending; it left more questions than answers.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 73,
+           "text": "This is not worth your time or money; complete disaster!",
+           "sentiment": "negative"
+       },
+       {
+           "id": 74,
+           "text": "An inspiring story that resonates deeply with real-life struggles.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 75,
+           "text": "It had some entertaining moments, but nothing extraordinary.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 76,
+           "text": "The film's execution was awful; what a letdown!",
+           "sentiment": "negative"
+       },
+       {
+           "id": 77,
+           "text": "A fun and light-hearted movie that is perfect for a family night!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 78,
+           "text": "I found myself zoning out during many scenes; quite forgettable.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 79,
+           "text": "The characters were annoying and poorly developed; I couldn't connect with them.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 80,
+           "text": "What a fantastic experience! This film exceeded all my expectations!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 81,
+           "text": "This movie was an absolute delight! The performances were top-notch and the storyline was engaging.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 82,
+           "text": "I really enjoyed the cinematography and the music. It made the experience quite memorable.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 83,
+           "text": "The characters were well-developed, and I found myself emotionally invested in their journeys.",
+           "sentiment": "positive"
+       },
+       {
+           "id": 84,
+           "text": "An entertaining film that kept me on the edge of my seat. I would recommend it to friends!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 85,
+           "text": "This film exceeded my expectations and left me with a warm feeling. Truly a gem!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 86,
+           "text": "The director did a phenomenal job. I will definitely watch it again!",
+           "sentiment": "positive"
+       },
+       {
+           "id": 87,
+           "text": "The film was okay, not great but not terrible either. It had its moments.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 88,
+           "text": "I felt indifferent about the plot. It was neither engaging nor boring.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 89,
+           "text": "The acting was average. It didn’t particularly stand out to me.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 90,
+           "text": "There were some interesting concepts, but they were not fully explored.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 91,
+           "text": "The pacing was inconsistent, leaving me unsure of what to think.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 92,
+           "text": "Overall, it was just another film that didn’t leave a lasting impression.",
+           "sentiment": "neutral"
+       },
+       {
+           "id": 93,
+           "text": "I was really disappointed. The plot was predictable and lacked depth.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 94,
+           "text": "The movie dragged on for too long and failed to captivate my interest.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 95,
+           "text": "It felt like a waste of time. The characters were clichéd and uninteresting.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 96,
+           "text": "I didn't connect with the story at all. It left me frustrated.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 97,
+           "text": "The dialogue was cringeworthy and took me out of the experience.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 98,
+           "text": "I wouldn't recommend this film. It was a chore to sit through.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 99,
+           "text": "The movie had some interesting ideas, but ultimately it fell flat and didn't deliver on its promises.",
+           "sentiment": "negative"
+       },
+       {
+           "id": 100,
+           "text": "While the cinematography was decent, the plot was confusing and left a lot to be desired.",
+           "sentiment": "negative"
+       }
+   ],
+   "summary": {
+       "total_generated": 100,
+       "sentiment_distribution": {
+           "positive": 30,
+           "neutral": 30,
+           "negative": 40
+  		 }
+}
+}

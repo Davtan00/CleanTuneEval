@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 import pandas as pd
 from .validators import TextValidator, ValidationMetrics
+from ..config.environment import HardwareConfig
 
 class DataProcessor:
     def __init__(self, hardware_config: HardwareConfig):

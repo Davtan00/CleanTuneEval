@@ -1,0 +1,27 @@
+# Core ML Libraries
+torch==2.2.0
+transformers==4.37.2
+sentence-transformers==2.2.2
+peft==0.8.2
+huggingface-hub==0.21.3  
+accelerate==0.27.2  
+# Data Processing
+pandas==2.2.0
+numpy==1.26.3
+scikit-learn==1.4.0
+
+# API and Server
+fastapi==0.109.2
+uvicorn==0.27.1
+python-multipart==0.0.6
+
+# Testing
+pytest==8.0.0
+httpx==0.26.0
+
+# Monitoring and Logging
+wandb==0.16.2
+loguru==0.7.2
+
+# Type Checking
+pydantic==2.6.1

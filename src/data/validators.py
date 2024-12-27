@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import IsolationForest
+from ..config.environment import HardwareConfig
 
 @dataclass
 class ValidationMetrics:
