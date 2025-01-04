@@ -2,25 +2,33 @@ from typing import List, Tuple, Optional
 import numpy as np
 from difflib import SequenceMatcher
 from sentence_transformers import SentenceTransformer
+from dataclasses import dataclass
+from typing import Dict, Any
+import torch
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TextValidator:
     def __init__(self, config):
         self.config = config
-        self.model = SentenceTransformer('paraphrase-mpnet-base-v2')
-        
-        # Stricter thresholds
-        self.exact_threshold = 0.999
-        self.filter_threshold = 0.85   # Increased from 0.65 to be more strict
-        
-        self.domain_adjustments = {
-            'technology': -0.05,
-            'service': 0.0,
-        }
+        logger.info("Initializing TextValidator with Sentence Transformer...")
+        try:
+            self.model = SentenceTransformer('paraphrase-mpnet-base-v2')
+            if self.config.use_mps:
+                logger.info("Attempting to use MPS acceleration...")
+                self.model = self.model.to('mps')
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            raise
 
-    def _should_filter(self, text1: str, text2: str, domain: str = None) -> Tuple[bool, Optional[str]]:
-        """
-        Returns (should_filter, filter_type) with stricter similarity requirements
-        """
+        # Simplified thresholds without domain specifics
+        self.exact_threshold = 0.999
+        self.similarity_threshold = 0.92  # Single threshold for all duplicates
+
+    def _should_filter(self, text1: str, text2: str) -> Tuple[bool, Optional[str]]:
+        """Simplified duplicate detection without domain specifics"""
         # Normalize texts
         text1 = ' '.join(text1.lower().strip().split())
         text2 = ' '.join(text2.lower().strip().split())
@@ -36,41 +44,129 @@ class TextValidator:
                                          normalize_embeddings=True)
             
             similarity = float(np.dot(embeddings[0], embeddings[1]))
-            
-            # Add length ratio check to avoid matching very different length texts
             len_ratio = min(len(text1), len(text2)) / max(len(text1), len(text2))
             
-            # Adjust threshold based on domain
-            threshold = self.filter_threshold
-            if domain:
-                threshold += self.domain_adjustments.get(domain, 0)
-            
-            # Only consider similar if both similarity and length ratio are high enough    
-            if similarity >= threshold and len_ratio > 0.7:
+            if similarity >= self.similarity_threshold and len_ratio > 0.7:
                 return True, 'similar'
                 
         except Exception as e:
-            print(f"Warning: Error during similarity calculation: {e}")
+            logger.error(f"Error during similarity calculation: {e}")
             
         return False, None
 
-    def detect_duplicates(self, texts: List[str], domain: str = None) -> List[Tuple[bool, Optional[str]]]:
-        """
-        Returns a list indicating which texts should be filtered out.
-        Now properly distinguishes between exact and similar matches.
-        """
-        results = []
-        for i, text in enumerate(texts):
-            should_filter = False
-            filter_type = None
+    def detect_duplicates(self, texts: List[str]) -> List[Tuple[bool, Optional[str]]]:
+        """Detect duplicates with enhanced error handling and logging."""
+        try:
+            if not texts:
+                logger.warning("Empty text list provided to detect_duplicates")
+                return []
+                
+            logger.info(f"Processing batch of {len(texts)} texts")
+            results = []
             
-            # Check against all previous texts
-            for j in range(i):
-                should_filter, detected_type = self._should_filter(texts[j], text, domain)
-                if should_filter:
-                    filter_type = detected_type
-                    break
+            # First pass: exact matches (fast)
+            normalized_texts = [' '.join(text.lower().strip().split()) for text in texts]
+            seen_texts = {}
+            
+            # Process texts in smaller chunks for similarity detection
+            chunk_size = 100  # Process 100 texts at a time
+            for i in range(0, len(texts), chunk_size):
+                chunk = texts[i:i + chunk_size]
+                chunk_results = []
+                
+                try:
+                    # Get embeddings for chunk
+                    embeddings = self.model.encode(
+                        chunk,
+                        convert_to_tensor=True,
+                        normalize_embeddings=True,
+                        show_progress_bar=False
+                    )
                     
-            results.append((should_filter, filter_type))
+                    # Process each text in chunk
+                    for j, text in enumerate(chunk):
+                        should_filter = False
+                        filter_type = None
+                        
+                        # Check exact duplicates
+                        norm_text = normalized_texts[i + j]
+                        if norm_text in seen_texts:
+                            should_filter, filter_type = True, 'exact'
+                        else:
+                            seen_texts[norm_text] = i + j
+                            
+                            # Check semantic similarity only if not exact duplicate
+                            if not should_filter:
+                                # Compare with previous texts in chunk
+                                for k in range(j):
+                                    similarity = float(torch.dot(embeddings[j], embeddings[k]))
+                                    if similarity >= self.similarity_threshold:
+                                        should_filter, filter_type = True, 'similar'
+                                        break
+                                        
+                        chunk_results.append((should_filter, filter_type))
+                        
+                except Exception as e:
+                    logger.error(f"Error processing chunk {i//chunk_size}: {str(e)}")
+                    # Return safe results for this chunk
+                    chunk_results.extend([(False, None)] * len(chunk))
+                    
+                results.extend(chunk_results)
+                logger.debug(f"Processed chunk {i//chunk_size + 1}, found {sum(1 for r in chunk_results if r[0])} duplicates")
+                
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in detect_duplicates: {str(e)}")
+            # Return safe default results
+            return [(False, None)] * len(texts)
+
+    def compute_vocabulary_richness(self, text: str) -> float:
+        """Compute vocabulary richness score for a text."""
+        words = text.lower().split()
+        if not words:
+            return 0.0
         
-        return results
+        # Calculate unique words ratio
+        unique_words = len(set(words))
+        total_words = len(words)
+        
+        return unique_words / total_words
+
+@dataclass
+class ValidationMetrics:
+    """Metrics collected during the validation process."""
+    total_processed: int = 0
+    length_filtered: int = 0
+    duplicates_removed: int = 0
+    exact_duplicates: int = 0
+    near_duplicates: int = 0
+    total_removed: int = 0
+    # Add these fields for quality metrics
+    perplexity: float = 0.0
+    similarity_score: float = 0.0
+    vocabulary_richness: float = 0.0
+    is_outlier: bool = False
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary format."""
+        return {
+            'total_processed': self.total_processed,
+            'length_filtered': self.length_filtered,
+            'duplicates_removed': self.duplicates_removed,
+            'exact_duplicates': self.exact_duplicates,
+            'near_duplicates': self.near_duplicates,
+            'total_removed': self.total_removed
+        }    
+    def update_duplicate_counts(self, is_duplicate: bool, duplicate_type: str = None) -> None:
+        """Update duplicate-related counters."""
+        if is_duplicate:
+            self.duplicates_removed += 1
+            if duplicate_type == 'exact':
+                self.exact_duplicates += 1
+            elif duplicate_type == 'similar':
+                self.near_duplicates += 1
+                
+    def finalize(self) -> None:
+        """Calculate final metrics."""
+        self.total_removed = self.length_filtered + self.duplicates_removed

@@ -1,9 +1,11 @@
 from typing import Dict, List, Optional
 import pandas as pd
 import re
+from tqdm import tqdm
 from .validators import TextValidator, ValidationMetrics
 from ..config.environment import HardwareConfig
 from ..config.logging_config import setup_logging
+import time
 
 logger = setup_logging()
 
@@ -14,82 +16,97 @@ class DataProcessor:
         self.max_words = 150
         logger.info(f"Initialized DataProcessor with word limits: {self.min_words}-{self.max_words}")
         
-    def process_batch(self, data: Dict) -> Dict:
-        """Process a batch of synthetic reviews"""
-        logger.info(f"Processing batch for domain: {data['domain']}")
-        logger.info(f"Initial data size: {len(data['generated_data'])} reviews")
+    def process_batch(self, data: Dict, batch_size: int = 1000) -> Dict:
+        """Process a batch of synthetic reviews with proper structure for pipeline."""
+        start_time = time.time()
         
-        df = pd.DataFrame(data['generated_data'])
-        
-        # Basic cleaning
-        df['clean_text'] = df['text'].apply(self._basic_clean)
-        initial_size = len(df)
-        
-        # Length filtering
-        df['word_count'] = df['clean_text'].str.split().str.len()
-        df = df[(df['word_count'] >= self.min_words) & 
-                (df['word_count'] <= self.max_words)]
-        length_filtered = initial_size - len(df)
-        logger.info(f"Removed {length_filtered} reviews due to length constraints")
-        
-        # Compute quality metrics
-        logger.info("Computing quality metrics...")
-        df['metrics'] = df['clean_text'].apply(self._compute_metrics)
-        
-        # Detect duplicates
-        logger.info("Detecting duplicates...")
-        duplicate_results = self.validator.detect_duplicates(
-            df['clean_text'].tolist(),
-            domain=data.get('domain', 'general')
-        )
-        df['is_duplicate'] = [result[0] for result in duplicate_results]
-        df['duplicate_type'] = [result[1] for result in duplicate_results]
-        
-        duplicate_stats = {
-            'exact': sum(1 for _, type_ in duplicate_results if type_ == 'exact'),
-            'ngram': sum(1 for _, type_ in duplicate_results if type_ == 'ngram'),
-            'semantic': sum(1 for _, type_ in duplicate_results if type_ == 'semantic')
-        }
-        
-        duplicate_count = sum(df['is_duplicate'])
-        logger.info(f"Found {duplicate_count} duplicate reviews:")
-        logger.info(f"  - Exact matches: {duplicate_stats['exact']}")
-        logger.info(f"  - N-gram similar: {duplicate_stats['ngram']}")
-        logger.info(f"  - Semantic similar: {duplicate_stats['semantic']}")
-        
-        # Filter out low quality samples
-        df = df[
-            (~df['is_duplicate']) & 
-            (df['metrics'].apply(lambda x: not x.is_outlier)) &
-            (df['metrics'].apply(lambda x: x.vocabulary_richness > 0.3))
-        ]
-        
-        final_size = len(df)
-        logger.info(f"Final dataset size: {final_size} reviews")
-        
-        # Prepare output format
-        processed_data = {
-            'domain': data['domain'],
-            'generated_data': df[['id', 'clean_text', 'sentiment']].to_dict('records'),
-            'summary': {
-                'total_analyzed': len(data['generated_data']),
-                'total_accepted': len(df),
-                'sentiment_distribution': df['sentiment'].value_counts().to_dict(),
-                'quality_metrics': {
-                    'avg_vocabulary_richness': df['metrics'].apply(lambda x: x.vocabulary_richness).mean(),
-                    'duplicate_rate': duplicate_count / initial_size,
-                    'acceptance_rate': final_size / initial_size,
-                    'avg_word_count': df['word_count'].mean()
-                },
-                'filtering_summary': {
-                    'length_filtered': length_filtered,
-                    'duplicates_removed': duplicate_count,
-                    'total_removed': initial_size - final_size
+        try:
+            logger.info(f"Processing batch for domain: {data['domain']}")
+            
+            # Create DataFrame with required columns
+            df = pd.DataFrame(data['generated_data'])[['id', 'text', 'sentiment']]
+            initial_size = len(df)
+            
+            # Basic cleaning and filtering
+            df['clean_text'] = df['text'].apply(self._basic_clean)
+            df['word_count'] = df['clean_text'].str.split().str.len()
+            
+            # Length filtering
+            length_mask = (df['word_count'] >= self.min_words) & (df['word_count'] <= self.max_words)
+            length_filtered = int((~length_mask).sum())  # Convert to Python int otherwise JSON serialization ERROR
+            df = df[length_mask]
+            
+            # Process duplicates in batches
+            duplicate_stats = {'exact': 0, 'similar': 0}
+            is_duplicate = []
+            
+            for i in range(0, len(df), batch_size):
+                batch = df['clean_text'].iloc[i:i + batch_size].tolist()
+                batch_results = self.validator.detect_duplicates(batch)
+                is_duplicate.extend([r[0] for r in batch_results])
+                
+                # Update stats
+                for _, dup_type in batch_results:
+                    if dup_type:
+                        duplicate_stats[dup_type] += 1
+            
+            df['is_duplicate'] = is_duplicate
+            df = df[~df['is_duplicate']]
+            
+            if len(df) == 0:
+                logger.error("All reviews were filtered out")
+                return {
+                    'status': 'error',
+                    'message': 'All reviews were filtered out',
+                    'summary': {
+                        'total_processed': int(initial_size),
+                        'filtering_summary': {
+                            'length_filtered': length_filtered,
+                            'duplicates_removed': sum(duplicate_stats.values()),
+                            'exact_duplicates': duplicate_stats['exact'],
+                            'near_duplicates': duplicate_stats['similar'],
+                            'total_removed': int(initial_size)
+                        }
+                    }
+                }
+            
+            # Convert numeric values to Python native types
+            sentiment_dist = df['sentiment'].value_counts().to_dict()
+            sentiment_dist = {k: int(v) for k, v in sentiment_dist.items()}
+            
+            # Prepare final output structure
+            processed_data = {
+                'generated_data': df[['id', 'clean_text', 'sentiment']].to_dict('records'),
+                'domain': data['domain'],
+                'summary': {
+                    'total_processed': int(initial_size),
+                    'total_accepted': int(len(df)),
+                    'sentiment_distribution': sentiment_dist,
+                    'filtering_summary': {
+                        'length_filtered': length_filtered,
+                        'duplicates_removed': sum(duplicate_stats.values()),
+                        'exact_duplicates': duplicate_stats['exact'],
+                        'near_duplicates': duplicate_stats['similar'],
+                        'total_removed': int(initial_size - len(df))
+                    }
                 }
             }
-        }
-        
-        return processed_data
+            
+            return {
+                'status': 'success',
+                'data': processed_data,
+                'performance': {
+                    'processing_time': float(time.time() - start_time),
+                    'avg_time_per_review': float((time.time() - start_time) / initial_size)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in process_batch: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
     
     def _basic_clean(self, text: str) -> str:
         """Enhanced text cleaning"""
