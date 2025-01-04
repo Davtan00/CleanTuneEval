@@ -15,6 +15,7 @@ class ValidationMetrics:
 class TextValidator:
     def __init__(self, hardware_config: HardwareConfig):
         # Initialize SentenceBERT for similarity detection
+        # Legit just copy what we had done  in the review quality backend repo, should be on davtan00 private
         self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
         if hardware_config.use_mps:
             self.sentence_model = self.sentence_model.to(hardware_config.device)

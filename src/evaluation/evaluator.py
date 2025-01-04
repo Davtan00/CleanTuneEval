@@ -115,6 +115,8 @@ class CrossDomainEvaluator:
     def _create_mixed_dataset(self, dataset: Dict, synthetic_ratio: float) -> Dict:
         """Create a mixed dataset with both real and synthetic data"""
         # TODO: Implement this, evaluate final if we want binary classification or 3 way
+        # Depending also on which domain we care about, for example technology, healthcare, and so on.
+
         pass
     
     def _create_summary(self, results: List[Dict]) -> Dict:
