@@ -1,53 +1,35 @@
-from typing import Dict, Optional
-from .lora_trainer import LoRATrainer
+from typing import Dict, Any, Optional
 from .model_factory import ModelFactory
-from ..config.environment import HardwareConfig
+from .lora_trainer import LoRATrainer
+from .lora_config import LoRAParameters
+import logging
 
-class ModelAdaptation:
-    def __init__(self, hardware_config: HardwareConfig):
-        self.hardware_config = hardware_config
+logger = logging.getLogger(__name__)
+
+class ModelAdapter:
+    def __init__(self):
         self.model_factory = ModelFactory()
+        self.trainer = LoRATrainer(self.model_factory)
         
-    def adapt_model(
-        self,
-        base_model_name: str,
-        train_data: Dict,
-        eval_data: Optional[Dict] = None,
-        custom_lora_config: Optional[Dict] = None
-    ):
-        """
-        Main entry point for model adaptation
-        """
+    def adapt_model(self,
+                   train_dataset,
+                   eval_dataset,
+                   output_dir: str = "./results",
+                   lora_params: Optional[LoRAParameters] = None) -> Dict[str, Any]:
+        
         try:
-            # Initialize base model
-            model, tokenizer = self.model_factory.create_model(
-                base_model_name, 
-                self.hardware_config
+            result = self.trainer.train(
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                lora_params=lora_params,
+                output_dir=output_dir
             )
             
-            # Create LoRA trainer
-            lora_config = LoRAConfig(**custom_lora_config) if custom_lora_config else None
-            trainer = LoRATrainer(
-                model,
-                tokenizer,
-                self.hardware_config,
-                lora_config
-            )
-            
-            # Train the model
-            result = trainer.train(
-                train_data,
-                eval_data,
-                output_dir=f"./adapted_models/{base_model_name}_lora"
-            )
-            
-            return {
-                'status': 'success',
-                'training_results': result
-            }
+            return result
             
         except Exception as e:
+            logger.error(f"Model adaptation failed: {str(e)}")
             return {
-                'status': 'error',
-                'message': str(e)
+                "status": "error",
+                "message": str(e)
             } 

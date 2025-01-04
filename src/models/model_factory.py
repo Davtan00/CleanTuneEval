@@ -1,28 +1,34 @@
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import torch
 from ..config.environment import HardwareConfig
-from ..config.logging_config import setup_logging
+import logging
 
-logger = setup_logging()
+logger = logging.getLogger(__name__)
 
 class ModelFactory:
-    @staticmethod
-    def create_model(model_name: str, hardware_config: HardwareConfig):
-        """
-        Initialize model with optimal settings for Apple Silicon
-        """
-        logger.info(f"Creating model: {model_name}")
-        logger.info(f"Hardware config: device={hardware_config.device}, mps={hardware_config.use_mps}")
+    def __init__(self):
+        self.hardware = HardwareConfig.detect_hardware()
         
-        model = AutoModel.from_pretrained(model_name)
+    def get_device(self):
+        if self.hardware.use_mps and torch.backends.mps.is_available():
+            return torch.device("mps")
+        elif torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+        
+    def create_model(self, model_name="microsoft/deberta-v3-base", num_labels=3):
+        """
+        Initialize model with optimal settings for the detected hardware
+        """
+        device = self.get_device()
+        logger.info(f"Initializing {model_name} on {device}")
+        
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            torch_dtype=torch.float16 if device != torch.device("cpu") else torch.float32
+        )
+        
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         
-        if hardware_config.use_mps:
-            logger.info("Enabling Metal Performance Shaders")
-            # Enable Metal Performance Shaders
-            model = model.to(hardware_config.device)
-            # Enable mixed precision for better performance
-            model = model.half()  # Use FP16
-            logger.info("Model converted to FP16 for better performance")
-            
-        return model, tokenizer 
+        return model.to(device), tokenizer 

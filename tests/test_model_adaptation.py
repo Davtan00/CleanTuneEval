@@ -1,38 +1,26 @@
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
+import pytest
+from src.models.model_factory import ModelFactory
+from src.models.adaptation import ModelAdapter
+from src.models.lora_config import LoRAParameters
+import torch
 
-from src.config.environment import HardwareConfig
-from src.models.adaptation import ModelAdaptation
+def test_model_factory_device_selection():
+    factory = ModelFactory()
+    device = factory.get_device()
+    assert isinstance(device, torch.device)
+    
+def test_lora_config_creation():
+    params = LoRAParameters(r=8, lora_alpha=16)
+    config = create_lora_config(params)
+    assert config.r == 8
+    assert config.lora_alpha == 16
 
-def test_model_initialization():
-    """Test model initialization with hardware config"""
-    hardware_config = HardwareConfig.detect_hardware()
-    adapter = ModelAdaptation(hardware_config)
-    
-    print("\nHardware Configuration:")
-    print(f"Device: {hardware_config.device}")
-    print(f"Cores: {hardware_config.n_cores}")
-    print(f"Memory: {hardware_config.memory_limit}GB")
-    print(f"MPS Available: {hardware_config.use_mps}")
-    
-    return adapter
-
-def test_model_adaptation():
-    """Test model adaptation with sample data"""
-    adapter = test_model_initialization()
-    
-    # Load test data (you would need to create this)
-    with open('tests/data/training_sample.json', 'r') as f:
-        train_data = json.load(f)
-    
+@pytest.mark.integration
+def test_model_adaptation(sample_dataset):
+    adapter = ModelAdapter()
     result = adapter.adapt_model(
-        base_model_name="roberta-base",
-        train_data=train_data,
-        eval_data=None
+        train_dataset=sample_dataset["train"],
+        eval_dataset=sample_dataset["validation"]
     )
-    
-    assert result['status'] == 'success', "Model adaptation failed"
-    print("\nModel Adaptation Results:")
-    print(f"Training Loss: {result['training_results']['train_loss']:.4f}")
-    print(f"Model saved at: {result['training_results']['model_path']}") 
+    assert result["status"] == "success"
+    assert "metrics" in result 
