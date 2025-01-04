@@ -6,6 +6,8 @@ from .lora_config import create_lora_config, LoRAParameters
 from .model_factory import ModelFactory
 import logging
 from ..evaluation.metrics import compute_classification_metrics
+from torch.utils.data import DataLoader
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +49,42 @@ class LoRATrainer:
     def train(self, 
               train_dataset, 
               eval_dataset, 
+              domain_type: str = "general",
               lora_params: Optional[LoRAParameters] = None,
               output_dir: str = "./results") -> Dict[str, Any]:
+        
+        # Setup domain-specific weights
+        class_weights = get_class_weights(domain_type)
+        
+        # Enhanced metrics tracking
+        class ComplianceTrainer(Trainer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.domain_type = domain_type
+            
+            def compute_loss(self, model, inputs, return_outputs=False):
+                labels = inputs.pop("labels")
+                outputs = model(**inputs)
+                logits = outputs.logits
+                
+                # Use domain-specific weighted loss
+                loss_fct = get_weighted_loss(self.domain_type)
+                loss = loss_fct(logits.view(-1, self.model.config.num_labels), 
+                              labels.view(-1))
+                
+                return (loss, outputs) if return_outputs else loss
+            
+            def get_train_dataloader(self):
+                # Implement stratified sampling
+                return DataLoader(
+                    self.train_dataset,
+                    batch_sampler=StratifiedBatchSampler(
+                        self.train_dataset['labels'],
+                        self.args.per_device_train_batch_size
+                    ),
+                    num_workers=self.args.dataloader_num_workers,
+                    pin_memory=self.args.dataloader_pin_memory
+                )
         
         logger.info(f"Training on device: {self.device}")
         
@@ -129,8 +165,14 @@ class LoRATrainer:
             logger.info(f"Model saved at: {output_dir}")
             logger.info("Final Metrics:")
             for metric_name, value in metrics.items():
-                if metric_name != 'confusion_matrix':  # Don't log the confusion matrix
+                if metric_name == 'confusion_matrix':
+                    logger.info(f"Confusion Matrix:")
+                    for row in value:
+                        logger.info(f"    {row}")
+                elif isinstance(value, (int, float)):
                     logger.info(f"{metric_name}: {value:.4f}")
+                else:
+                    logger.info(f"{metric_name}: {value}")
             
             return {
                 "status": "success",
