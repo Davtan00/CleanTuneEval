@@ -1,4 +1,4 @@
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoConfig
 import torch
 from ..config.environment import HardwareConfig
 import logging
@@ -6,8 +6,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ModelFactory:
-    def __init__(self):
+    def __init__(self, model_name: str = "microsoft/deberta-v3-base"):
         self.hardware = HardwareConfig.detect_hardware()
+        self.model_name = model_name
+        self.device = self.get_device()
+        logger.info(f"Initialized ModelFactory with {model_name} for {self.device}")
         
     def get_device(self):
         if self.hardware.use_mps and torch.backends.mps.is_available():
@@ -16,27 +19,17 @@ class ModelFactory:
             return torch.device("cuda")
         return torch.device("cpu")
         
-    def create_model(self, model_name="microsoft/deberta-v3-base", num_labels=3):
-        """
-        Initialize model with optimal settings for the detected hardware
-        """
-        device = self.get_device()
-        logger.info(f"Initializing {model_name} on {device}")
-        
-        # Determine appropriate dtype based on hardware
-        if device.type == "cuda":
-            dtype = torch.float16
-        elif device.type == "mps":
-            dtype = torch.float32  # Use FP32 for MPS
-        else:
-            dtype = torch.float32
-            
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=num_labels,
-            torch_dtype=dtype
+    def create_model(self):
+        config = AutoConfig.from_pretrained(
+            self.model_name,
+            num_labels=3,  # Explicitly set for 3-class classification
+            problem_type="single_label_classification"
         )
         
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_name,
+            config=config
+        ).to(self.device)
         
-        return model.to(device), tokenizer 
+        logger.info(f"Model config: {config}")
+        return model, AutoTokenizer.from_pretrained(self.model_name) 
