@@ -1,3 +1,4 @@
+import os
 from datasets import load_from_disk
 from pathlib import Path
 import logging
@@ -5,6 +6,9 @@ from typing import Dict, Any, Optional, Literal
 from .adaptation import ModelAdapter
 from .lora_config import LoRAParameters
 from ..config.logging_config import setup_logging
+
+# Set tokenizer parallelism explicitly
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = setup_logging()
 
@@ -98,6 +102,25 @@ def train_model(dataset_path: str,
     return trainer.train(dataset_path)
 
 if __name__ == "__main__":
-    # Example usage
-    dataset_path = "src/data/datasets/technology_7k_20250104_194358_adjusted_ccc"
-    train_model(dataset_path) 
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Train a model with LoRA adaptation')
+    parser.add_argument('--dataset', type=str, 
+                       default="src/data/datasets/technology_7k_20250104_194358_adjusted_ccc",
+                       help='Path to the dataset')
+    parser.add_argument('--debug', action='store_true',
+                       help='Print debug information about the dataset')
+    
+    args = parser.parse_args()
+    
+    if args.debug:
+        dataset = load_from_disk(args.dataset)
+        print("\nDataset structure:")
+        print(dataset)
+        print("\nFirst example:")
+        print(dataset['train'][0])
+        print("\nFeatures:")
+        print(dataset['train'].features)
+    
+    print("\nStarting model training...")
+    train_model(args.dataset) 

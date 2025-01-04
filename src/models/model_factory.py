@@ -23,10 +23,18 @@ class ModelFactory:
         device = self.get_device()
         logger.info(f"Initializing {model_name} on {device}")
         
+        # Determine appropriate dtype based on hardware
+        if device.type == "cuda":
+            dtype = torch.float16
+        elif device.type == "mps":
+            dtype = torch.float32  # Use FP32 for MPS
+        else:
+            dtype = torch.float32
+            
         model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=num_labels,
-            torch_dtype=torch.float16 if device != torch.device("cpu") else torch.float32
+            torch_dtype=dtype
         )
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)

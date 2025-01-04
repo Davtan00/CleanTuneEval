@@ -14,10 +14,18 @@ class LoRATrainer:
         self.device = self.model_factory.get_device()
         
     def setup_training_args(self, output_dir: str) -> TrainingArguments:
+        # Determine hardware-specific settings
+        use_fp16 = False
+        if self.device.type == "cuda":
+            use_fp16 = True
+        elif self.device.type == "mps":
+            # MPS doesn't support FP16 training yet
+            use_fp16 = False
+            
         return TrainingArguments(
             output_dir=output_dir,
             learning_rate=2e-5,
-            per_device_train_batch_size=32,
+            per_device_train_batch_size=16,  # Reduced batch size for better compatibility
             gradient_accumulation_steps=2,
             num_train_epochs=5,
             warmup_ratio=0.1,
@@ -27,10 +35,15 @@ class LoRATrainer:
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
-            use_mps_device=self.device.type == "mps",
-            fp16=self.device.type != "cpu",
+            # Remove use_mps_device as it's deprecated
+            fp16=use_fp16,  # Only enable for CUDA
             logging_dir="logs",
             logging_steps=100,
+            # Add dataloader settings for better memory management
+            dataloader_num_workers=0,  # Prevent potential MPS issues
+            dataloader_pin_memory=False if self.device.type == "mps" else True,
+            # Disable wandb for now
+            report_to="none",  # This will disable wandb logging
         )
         
     def train(self, 
@@ -39,11 +52,59 @@ class LoRATrainer:
               lora_params: Optional[LoRAParameters] = None,
               output_dir: str = "./results") -> Dict[str, Any]:
         
+        logger.info(f"Training on device: {self.device}")
+        
+        # Create label mapping
+        label_mapping = {'negative': 0, 'neutral': 1, 'positive': 2}
+        
+        def convert_labels(example):
+            example['labels'] = label_mapping[example['labels']]
+            return example
+        
+        # Convert string labels to integers
+        logger.info("Converting labels to integers...")
+        train_dataset = train_dataset.map(convert_labels)
+        eval_dataset = eval_dataset.map(convert_labels)
+        
         model, tokenizer = self.model_factory.create_model()
         lora_config = create_lora_config(lora_params)
         
         model = get_peft_model(model, lora_config)
         logger.info(f"Trainable parameters: {model.print_trainable_parameters()}")
+        
+        # Add preprocessing function for the datasets
+        def preprocess_function(examples):
+            # Tokenize the texts
+            tokenized = tokenizer(
+                examples["text"],
+                truncation=True,
+                padding=True,
+                max_length=512,
+                return_tensors=None
+            )
+            
+            # Important: Keep the labels in the dataset
+            tokenized['labels'] = examples['labels']
+            return tokenized
+        
+        # Preprocess the datasets
+        logger.info("Tokenizing datasets...")
+        train_dataset = train_dataset.map(
+            preprocess_function,
+            batched=True,
+            desc="Preprocessing train dataset",
+            remove_columns=['text', 'id']  # Only remove text and id, keep labels
+        )
+        eval_dataset = eval_dataset.map(
+            preprocess_function,
+            batched=True,
+            desc="Preprocessing validation dataset",
+            remove_columns=['text', 'id']  # Only remove text and id, keep labels
+        )
+        
+        # Set the format of our datasets to PyTorch tensors
+        train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        eval_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         
         training_args = self.setup_training_args(output_dir)
         
