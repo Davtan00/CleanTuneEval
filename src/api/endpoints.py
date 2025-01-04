@@ -9,19 +9,40 @@ from .main import (
     model_adapter,
     evaluator
 )
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
 @router.post("/process-data")
-async def process_data(request: ProcessDataRequest):
-    """
-    Process and validate synthetic review data
-    """
+async def process_data(data: Dict):
     try:
-        result = data_pipeline.process_synthetic_data(request.data)
-        return result
+        pipeline = DataPipeline()
+        result = pipeline.process_synthetic_data(data)
+        
+        if result['status'] == 'error':
+            return JSONResponse(
+                status_code=200,  # Keep 200 to maintain compatibility
+                content={
+                    'status': 'error',
+                    'message': result.get('message', 'Processing failed'),
+                    'summary': result.get('summary', {})
+                }
+            )
+        
+        return JSONResponse(
+            status_code=200,
+            content=result
+        )
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error processing data: {str(e)}")
+        return JSONResponse(
+            status_code=200,  # Keep 200 to maintain compatibility
+            content={
+                'status': 'error',
+                'message': str(e)
+            }
+        )
 
 @router.post("/adapt-model")
 async def adapt_model(request: AdaptModelRequest):
