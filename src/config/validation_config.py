@@ -12,13 +12,13 @@ DUPLICATE_CONFIG = {
     },
     'ngram': {
         'enabled': True,
-        'n': 3,
-        'threshold': 0.4  # Even more lenient n-gram threshold
+        'n': 1,  # Use unigrams (single words) instead of trigrams
+        'threshold': 0.7  # Require 70% word overlap
     },
     'semantic': {
         'enabled': True,
         'model_name': 'all-MiniLM-L6-v2',
-        'threshold': 0.8,  # Stricter semantic threshold
+        'threshold': 0.6,  # Lower threshold to catch semantic similarities
         'min_length_ratio': 0.6
     }
 }

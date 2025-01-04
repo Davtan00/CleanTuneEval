@@ -41,21 +41,34 @@ class TextValidator:
     def _get_ngrams(self, text: str, n: int) -> Set[str]:
         """Generate n-grams from text."""
         tokens = self._normalize_text(text).split()
-        return set(''.join(gram) for gram in ngrams(tokens, n))
+        # Use a space delimiter between words in each n-gram
+        return set(' '.join(gram) for gram in ngrams(tokens, n))
     
     def _calculate_ngram_similarity(self, text1: str, text2: str) -> float:
-        """Calculate n-gram based similarity between two texts."""
+        """Calculate word-level n-gram similarity between two texts."""
+        # Normalize and tokenize texts
+        words1 = self._normalize_text(text1).split()
+        words2 = self._normalize_text(text2).split()
+        
         n = self.config['ngram']['n']
-        ngrams1 = self._get_ngrams(text1, n)
-        ngrams2 = self._get_ngrams(text2, n)
+        
+        # Generate word n-grams
+        def get_word_ngrams(words, n):
+            if len(words) < n:
+                return set([' '.join(words)])
+            return set(' '.join(words[i:i+n]) for i in range(len(words) - n + 1))
+        
+        ngrams1 = get_word_ngrams(words1, n)
+        ngrams2 = get_word_ngrams(words2, n)
         
         if not ngrams1 or not ngrams2:
             return 0.0
         
-        intersection = ngrams1.intersection(ngrams2)
-        union = ngrams1.union(ngrams2)
+        # Calculate Jaccard similarity
+        intersection = len(ngrams1.intersection(ngrams2))
+        union = len(ngrams1.union(ngrams2))
         
-        return len(intersection) / len(union)
+        return intersection / union
     
     def _calculate_semantic_similarity(self, embeddings: np.ndarray) -> np.ndarray:
         """Calculate semantic similarity matrix using SentenceBERT embeddings."""
@@ -90,7 +103,11 @@ class TextValidator:
         else:
             results = [(False, None) for _ in texts]
         
-        # Step 2: N-gram similarity (only for non-exact duplicates)
+        # Pre-compute all similarities
+        ngram_similarities = {}
+        semantic_similarities = {}
+        
+        # Calculate n-gram similarities
         if self.config['ngram']['enabled']:
             ngram_threshold = self.config['ngram']['threshold'] * threshold_modifier
             for i in range(len(texts)):
@@ -99,10 +116,9 @@ class TextValidator:
                         if not results[j][0]:  # Only compare with non-duplicates
                             sim = self._calculate_ngram_similarity(texts[i], texts[j])
                             if sim > ngram_threshold:
-                                results[i] = (True, 'ngram')
-                                break
+                                ngram_similarities[(i, j)] = sim
         
-        # Step 3: Semantic similarity (only for remaining non-duplicates)
+        # Calculate semantic similarities
         if self.config['semantic']['enabled']:
             semantic_threshold = self.config['semantic']['threshold'] * threshold_modifier
             non_dup_indices = [i for i, (is_dup, _) in enumerate(results) if not is_dup]
@@ -115,14 +131,33 @@ class TextValidator:
                 for idx, i in enumerate(non_dup_indices):
                     for j_idx, j in enumerate(non_dup_indices[:idx]):
                         if similarity_matrix[idx, j_idx] > semantic_threshold:
-                            # Check length ratio
-                            len_ratio = (len(texts[i]) / len(texts[j]) 
-                                       if len(texts[j]) > len(texts[i])
-                                       else len(texts[j]) / len(texts[i]))
-                            
-                            if len_ratio > self.config['semantic']['min_length_ratio']:
-                                results[i] = (True, 'semantic')
-                                break
+                            semantic_similarities[(i, j)] = similarity_matrix[idx, j_idx]
+        
+        # Process duplicates in order: n-gram first, then semantic
+        for i in range(len(texts)):
+            if results[i][0]:  # Skip if already marked as duplicate
+                continue
+            
+            # Check n-gram duplicates first
+            ngram_match = False
+            for j in range(i):
+                if (i, j) in ngram_similarities:
+                    results[i] = (True, 'ngram')
+                    ngram_match = True
+                    break
+            
+            # Only check semantic if no n-gram match found
+            if not ngram_match:
+                for j in range(i):
+                    if (i, j) in semantic_similarities:
+                        # Check length ratio
+                        len_ratio = (len(texts[i]) / len(texts[j]) 
+                                   if len(texts[j]) > len(texts[i])
+                                   else len(texts[j]) / len(texts[i]))
+                        
+                        if len_ratio > self.config['semantic']['min_length_ratio']:
+                            results[i] = (True, 'semantic')
+                            break
         
         return results
     
