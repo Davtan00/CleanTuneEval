@@ -16,19 +16,18 @@ class DatasetManager:
     def create_dataset(
         self,
         data: Dict,
-        domain: str,
-        split_ratios: Dict[str, float] = {"train": 0.7, "validation": 0.15, "test": 0.15}, # TODO: make this configurable, perhaps also try the split of the previous repo
+        dataset_id: str,
+        split_ratios: Dict[str, float] = {"train": 0.7, "validation": 0.15, "test": 0.15},
         format_type: str = "sentiment_classification"
     ) -> DatasetDict:
         """
         Create a dataset with flexible formatting for different model types
         """
-        logger.info(f"Creating dataset for domain: {domain}")
+        logger.info(f"Creating dataset with ID: {dataset_id}")
         
         reviews_df = pd.DataFrame(data['generated_data'])
         
         # Format data according to task type
-        # Perhaps we should have had "label" instead of "sentiment" from the start
         if format_type == "sentiment_classification":
             dataset_dict = {
                 'text': reviews_df['clean_text'].tolist(),
@@ -52,7 +51,7 @@ class DatasetManager:
         splits = self._create_splits(dataset, split_ratios)
         
         # Save dataset
-        save_path = self.base_path / domain
+        save_path = self.base_path / dataset_id
         splits.save_to_disk(save_path)
         logger.info(f"Saved dataset to {save_path}")
         
@@ -108,15 +107,15 @@ class DatasetManager:
 
     def load_dataset(
         self,
-        domain: str,
+        dataset_id: str,
         model_type: str = "sentiment_classification"
     ) -> DatasetDict:
         """
         Load dataset with optional reformatting for specific models
         """
-        dataset_path = self.base_path / domain
+        dataset_path = self.base_path / dataset_id
         if not dataset_path.exists():
-            raise FileNotFoundError(f"No dataset found for domain: {domain}")
+            raise FileNotFoundError(f"No dataset found with ID: {dataset_id}")
         
         dataset = DatasetDict.load_from_disk(dataset_path)
         

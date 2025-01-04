@@ -165,3 +165,5 @@ tests/test_data/
 .DS_Store
 *.idea
 generalData.json
+/src/data/datasets
+/src/data/storage

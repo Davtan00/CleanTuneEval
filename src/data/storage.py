@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import Dict, Optional, List
 from ..config.logging_config import setup_logging
+from .utils import generate_dataset_id
 
 logger = setup_logging()
 
@@ -14,28 +15,36 @@ class DataStorage:
         
     def _ensure_directories(self):
         """Create necessary directories if they don't exist"""
-        directories = ['raw', 'metrics']
+        directories = ['raw', 'processed', 'metrics']
         for dir_name in directories:
             dir_path = self.base_path / dir_name
             dir_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Ensured directory exists: {dir_path}")
     
-    def save_processed_data(self, data: Dict, domain: str) -> Dict:
+    def save_processed_data(self, data: Dict, domain: str, custom_tag: Optional[str] = None) -> Dict:
         """
-        Save raw processed data and metrics
-        Now focused on storing raw data and metrics, while dataset handling is done by DatasetManager
+        Save processed data and metrics:
+        - Processed data goes to processed/
+        - Metrics go to metrics/
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dataset_id = generate_dataset_id(
+            domain=domain,
+            data_size=len(data['generated_data']),
+            custom_tag=custom_tag,
+            timestamp=timestamp
+        )
         
-        # Save raw processed data
-        raw_path = self.base_path / "raw" / f"{domain}_{timestamp}.json"
-        with open(raw_path, 'w') as f:
+        # Save processed data
+        processed_path = self.base_path / "processed" / f"{dataset_id}.json"
+        with open(processed_path, 'w') as f:
             json.dump(data, f, indent=2)
-        logger.info(f"Saved raw processed data to: {raw_path}")
+        logger.info(f"Saved processed data to: {processed_path}")
         
         # Save metrics separately
-        metrics_path = self.base_path / "metrics" / f"{domain}_{timestamp}_metrics.json"
+        metrics_path = self.base_path / "metrics" / f"{dataset_id}_metrics.json"
         metrics_data = {
+            "dataset_id": dataset_id,
             "domain": domain,
             "timestamp": timestamp,
             "summary": data['summary']
@@ -46,22 +55,27 @@ class DataStorage:
         logger.info(f"Saved metrics to: {metrics_path}")
         
         return {
-            "raw_path": str(raw_path),
+            "dataset_id": dataset_id,
+            "processed_path": str(processed_path),
             "metrics_path": str(metrics_path)
         }
     
-    def load_raw_data(self, domain: str, timestamp: Optional[str] = None) -> Dict:
-        """Load raw processed data"""
-        if timestamp:
-            raw_path = self.base_path / "raw" / f"{domain}_{timestamp}.json"
-        else:
-            # Get latest file for domain
-            raw_files = list((self.base_path / "raw").glob(f"{domain}_*.json"))
-            if not raw_files:
-                raise FileNotFoundError(f"No raw data found for domain: {domain}")
-            raw_path = sorted(raw_files)[-1]
+    def load_raw_data(self, domain: str, filename: str) -> Dict:
+        """Load raw input data"""
+        raw_path = self.base_path / "raw" / filename
+        if not raw_path.exists():
+            raise FileNotFoundError(f"Raw data file not found: {raw_path}")
         
         with open(raw_path) as f:
+            return json.load(f)
+    
+    def load_processed_data(self, dataset_id: str) -> Dict:
+        """Load processed data by dataset ID"""
+        processed_path = self.base_path / "processed" / f"{dataset_id}.json"
+        if not processed_path.exists():
+            raise FileNotFoundError(f"Processed data not found: {processed_path}")
+        
+        with open(processed_path) as f:
             return json.load(f)
     
     def get_metrics_history(self, domain: str) -> List[Dict]:
@@ -73,4 +87,4 @@ class DataStorage:
             with open(metrics_file) as f:
                 metrics_history.append(json.load(f))
         
-        return metrics_history 
+        return metrics_history

@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 from .processor import DataProcessor
 from .storage import DataStorage
 from .dataset_manager import DatasetManager
@@ -16,7 +16,7 @@ class DataPipeline:
         self.dataset_manager = DatasetManager(base_path="src/data/datasets")
         logger.info("Initialized DataPipeline with all components")
     
-    def process_synthetic_data(self, data: Dict) -> Dict:
+    def process_synthetic_data(self, data: Dict, custom_tag: Optional[str] = None) -> Dict:
         """
         Main entry point for processing synthetic data
         """
@@ -25,17 +25,18 @@ class DataPipeline:
             logger.info(f"Processing synthetic data for domain: {data['domain']}")
             processed_data = self.processor.process_batch(data)
             
-            # Store the raw processed data
+            # Store processed data and metrics
             storage_paths = self.storage.save_processed_data(
                 processed_data,
-                domain=data['domain']
+                domain=data['domain'],
+                custom_tag=custom_tag
             )
             
             # Create dataset splits for model training
             logger.info("Creating dataset splits for model training")
             dataset_splits = self.dataset_manager.create_dataset(
                 data=processed_data,
-                domain=data['domain']
+                dataset_id=storage_paths['dataset_id']
             )
             
             return {
@@ -43,7 +44,8 @@ class DataPipeline:
                 'data': processed_data,
                 'storage': storage_paths,
                 'dataset_info': {
-                    'path': str(self.dataset_manager.base_path / data['domain']),
+                    'id': storage_paths['dataset_id'],
+                    'path': str(self.dataset_manager.base_path / storage_paths['dataset_id']),
                     'splits': {
                         split: len(dataset) for split, dataset in dataset_splits.items()
                     }
@@ -54,4 +56,4 @@ class DataPipeline:
             return {
                 'status': 'error',
                 'message': str(e)
-            } 
+            }
