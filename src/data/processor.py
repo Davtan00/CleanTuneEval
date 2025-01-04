@@ -38,10 +38,24 @@ class DataProcessor:
         
         # Detect duplicates
         logger.info("Detecting duplicates...")
-        duplicates = self.validator.detect_duplicates(df['clean_text'].tolist())
-        df['is_duplicate'] = duplicates
-        duplicate_count = sum(duplicates)
-        logger.info(f"Found {duplicate_count} duplicate reviews")
+        duplicate_results = self.validator.detect_duplicates(
+            df['clean_text'].tolist(),
+            domain=data.get('domain', 'general')
+        )
+        df['is_duplicate'] = [result[0] for result in duplicate_results]
+        df['duplicate_type'] = [result[1] for result in duplicate_results]
+        
+        duplicate_stats = {
+            'exact': sum(1 for _, type_ in duplicate_results if type_ == 'exact'),
+            'ngram': sum(1 for _, type_ in duplicate_results if type_ == 'ngram'),
+            'semantic': sum(1 for _, type_ in duplicate_results if type_ == 'semantic')
+        }
+        
+        duplicate_count = sum(df['is_duplicate'])
+        logger.info(f"Found {duplicate_count} duplicate reviews:")
+        logger.info(f"  - Exact matches: {duplicate_stats['exact']}")
+        logger.info(f"  - N-gram similar: {duplicate_stats['ngram']}")
+        logger.info(f"  - Semantic similar: {duplicate_stats['semantic']}")
         
         # Filter out low quality samples
         df = df[
