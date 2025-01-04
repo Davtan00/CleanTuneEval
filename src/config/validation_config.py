@@ -10,16 +10,23 @@ DUPLICATE_CONFIG = {
         'normalize_case': True,
         'strip_punctuation': True
     },
-    'ngram': {
+    'similarity': {
         'enabled': True,
-        'n': 1,  # Use unigrams (single words) instead of trigrams
-        'threshold': 0.7  # Require 70% word overlap
-    },
-    'semantic': {
-        'enabled': True,
-        'model_name': 'all-MiniLM-L6-v2',
-        'threshold': 0.6,  # Lower threshold to catch semantic similarities
-        'min_length_ratio': 0.6
+        'stage1': {
+            'enabled': True,
+            'token_ngram_size': 2,  # Use word bigrams instead of character n-grams
+            'threshold': 0.3  # Relaxed threshold for first stage
+        },
+        'stage2': {
+            'enabled': True,
+            'model_name': 'all-mpnet-base-v2',  # Stronger model for semantic similarity
+            'threshold': 0.8  # Stricter threshold for semantic similarity
+        },
+        'text_preprocessing': {
+            'remove_stopwords': True,
+            'normalize_contractions': True,
+            'strip_special_chars': True
+        }
     }
 }
 
@@ -42,25 +49,18 @@ QUALITY_CONFIG = {
 }
 
 # Domain-specific configurations
-DOMAIN_CONFIG = {
-    'technology': {
-        'duplicate_threshold_modifier': 1.0,
-        'min_technical_terms': 1
+DOMAIN_CONFIGS = {
+    'general': {
+        'duplicate_threshold_modifier': 1.0
     },
-    'product': {
-        'duplicate_threshold_modifier': 0.95,
-        'required_aspects': ['quality', 'functionality', 'value']
+    'technology': {
+        'duplicate_threshold_modifier': 0.9  # More lenient for tech reviews
     },
     'service': {
-        'duplicate_threshold_modifier': 0.9,
-        'required_aspects': ['service_quality', 'timeliness']
+        'duplicate_threshold_modifier': 1.1  # Stricter for service reviews
     }
 }
 
-def get_domain_config(domain: str) -> Dict[str, Any]:
-    """Get domain-specific configuration with fallback to default values."""
-    default_config = {
-        'duplicate_threshold_modifier': 1.0,
-        'required_aspects': []
-    }
-    return DOMAIN_CONFIG.get(domain, default_config)
+def get_domain_config(domain: str) -> dict:
+    """Get domain-specific configuration."""
+    return DOMAIN_CONFIGS.get(domain, DOMAIN_CONFIGS['general'])

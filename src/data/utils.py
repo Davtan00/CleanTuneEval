@@ -14,7 +14,7 @@ def generate_dataset_id(
         domain: Domain of the dataset (e.g., 'technology', 'movie')
         data_size: Number of items in the dataset
         custom_tag: Optional custom identifier
-        timestamp: Optional timestamp (if not provided, current time will be used)
+        timestamp: Optional timestamp (if not provided, current time will be used) e.g "scraped","synthetic"
     
     Returns:
         A unique dataset ID in the format: domain_size_timestamp[_tag]
