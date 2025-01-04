@@ -47,7 +47,7 @@ class DataProcessor:
         df = df[
             (~df['is_duplicate']) & 
             (df['metrics'].apply(lambda x: not x.is_outlier)) &
-            (df['metrics'].apply(lambda x: x.vocabulary_richness > 0.4))
+            (df['metrics'].apply(lambda x: x.vocabulary_richness > 0.3))
         ]
         
         final_size = len(df)
