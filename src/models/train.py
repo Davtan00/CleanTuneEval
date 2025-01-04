@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, Literal
 from .adaptation import ModelAdapter
 from .lora_config import LoRAParameters
 from ..config.logging_config import setup_logging
+from datetime import datetime
 
 # Set tokenizer parallelism explicitly
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -30,12 +31,17 @@ class ModelTrainer:
         self.tuning_method = tuning_method
         self.classification_type = classification_type
         
-        # Create structured output path: models/storage/{model_name}/{tuning_method}/{classification_type}
+        # Create timestamp for unique model versioning
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create structured output path: 
+        # models/storage/{model_name}/{tuning_method}/{classification_type}/{timestamp}
         model_name = base_model.split('/')[-1]
         self.model_save_dir = (self.base_path / "models/storage" 
                              / model_name 
                              / tuning_method 
-                             / classification_type)
+                             / classification_type
+                             / timestamp)
         
         self.adapter = ModelAdapter()
         

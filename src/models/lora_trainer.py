@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from .lora_config import create_lora_config, LoRAParameters
 from .model_factory import ModelFactory
 import logging
+from ..evaluation.metrics import compute_classification_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class LoRATrainer:
         return TrainingArguments(
             output_dir=output_dir,
             learning_rate=2e-5,
-            per_device_train_batch_size=16,  # Reduced batch size for better compatibility
+            per_device_train_batch_size=32,  # Increased for M4 Pro
             gradient_accumulation_steps=2,
             num_train_epochs=5,
             warmup_ratio=0.1,
@@ -33,17 +34,14 @@ class LoRATrainer:
             evaluation_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            # Remove use_mps_device as it's deprecated
-            fp16=use_fp16,  # Only enable for CUDA
+            metric_for_best_model="macro_f1",  # Changed to F1 score
+            greater_is_better=True,  # Changed because F1 should be maximized
+            fp16=use_fp16,
             logging_dir="logs",
             logging_steps=100,
-            # Add dataloader settings for better memory management
-            dataloader_num_workers=0,  # Prevent potential MPS issues
+            dataloader_num_workers=0,
             dataloader_pin_memory=False if self.device.type == "mps" else True,
-            # Disable wandb for now
-            report_to="none",  # This will disable wandb logging
+            report_to="none",
         )
         
     def train(self, 
@@ -114,6 +112,7 @@ class LoRATrainer:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
+            compute_metrics=compute_classification_metrics  # Add metrics computation
         )
         
         try:
@@ -121,8 +120,17 @@ class LoRATrainer:
             metrics = train_result.metrics
             trainer.save_model()
             
+            # Get detailed evaluation metrics
             eval_metrics = trainer.evaluate()
             metrics.update(eval_metrics)
+            
+            # Log detailed metrics
+            logger.info("Training completed successfully")
+            logger.info(f"Model saved at: {output_dir}")
+            logger.info("Final Metrics:")
+            for metric_name, value in metrics.items():
+                if metric_name != 'confusion_matrix':  # Don't log the confusion matrix
+                    logger.info(f"{metric_name}: {value:.4f}")
             
             return {
                 "status": "success",
