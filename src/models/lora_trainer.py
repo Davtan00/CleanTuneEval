@@ -203,13 +203,22 @@ class LoRATrainer:
 
         # Get dataset path correctly
         try:
-            # Extract the actual dataset name from the cache path
-            cache_path = train_dataset.cache_files[0]['filename']
-            dataset_name = cache_path.split('/')[-4]  # Get the dataset folder name
-            dataset_path = str(Path("src/data/datasets") / dataset_name)
-            logger.info(f"Dataset path detected: {dataset_path}")
-            logger.info(f"Dataset name extracted: {dataset_name}")
-        except (AttributeError, IndexError, KeyError) as e:
+            # Fix: Safely handle train_dataset.cache_files
+            cache_files = train_dataset.cache_files() if callable(train_dataset.cache_files) else train_dataset.cache_files
+            if cache_files and isinstance(cache_files, list) and len(cache_files) > 0:
+                cache_path = cache_files[0].get('filename', None)
+                if cache_path:
+                    dataset_name = cache_path.split('/')[-4]
+                    dataset_path = str(Path("src/data/datasets") / dataset_name)
+                    logger.info(f"Dataset path detected: {dataset_path}")
+                    logger.info(f"Dataset name extracted: {dataset_name}")
+                else:
+                    dataset_path = None
+                    logger.warning("Could not detect dataset path from empty 'filename'.")
+            else:
+                dataset_path = None
+                logger.warning("Could not detect dataset path from empty or invalid 'cache_files'.")
+        except Exception as e:
             logger.warning(f"Could not detect dataset path from dataset object: {e}")
             dataset_path = None
 
@@ -262,12 +271,14 @@ class LoRATrainer:
         try:
             train_result = trainer.train()
             
-            # Fix: Check if train_result is a tuple or TrainOutput object
+            # Handle metrics that may be returned as methods
             metrics = {}
             if hasattr(train_result, 'metrics'):
-                metrics = train_result.metrics
-            elif isinstance(train_result, tuple) and len(train_result) > 0:
-                metrics = train_result[0]
+                maybe_metrics = train_result.metrics
+                if callable(maybe_metrics):
+                    maybe_metrics = maybe_metrics()
+                if maybe_metrics is not None:
+                    metrics = maybe_metrics
             
             # Save model before trying to access metrics
             try:
@@ -298,7 +309,10 @@ class LoRATrainer:
             # Evaluate with proper error handling
             try:
                 eval_metrics = trainer.evaluate()
-                if isinstance(eval_metrics, dict):
+                # Handle eval_metrics that may be returned as a method
+                if callable(eval_metrics):
+                    eval_metrics = eval_metrics()
+                if eval_metrics is not None:
                     metrics.update(eval_metrics)
             except Exception as eval_error:
                 logger.error(f"Evaluation failed: {eval_error}")
@@ -334,6 +348,8 @@ class LoRATrainer:
         
         try:
             # Construct path to metrics file using dataset name
+            #base_path = Path(dataset_path).parent.parent.parent  # src/data
+            #metrics_file = base_path / "storage" / "metrics" / f"{Path(dataset_path).name}_metrics.json"
             dataset_name = Path(dataset_path).name
             metrics_file = Path("src/data/storage/metrics") / f"{dataset_name}_metrics.json"
             
@@ -420,4 +436,4 @@ class DetailedLossCallback(TrainerCallback):
                 logger.info(f"Step {step} - Eval loss: {logs['eval_loss']:.4f}")
             if 'loss' in logs and 'eval_loss' in logs:
                 diff = abs(logs['loss'] - logs['eval_loss'])
-                logger.info(f"Loss difference (train-eval): {diff:.4f}") 
+                logger.info(f"Loss difference (train-eval): {diff:.4f}")
