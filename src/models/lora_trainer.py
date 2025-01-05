@@ -22,11 +22,22 @@ class WeightedLossTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        """
+        Custom loss computation with optional class weights.
+        Ignores additional kwargs passed by the trainer.
+        """
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
-        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights) if self.class_weights else torch.nn.CrossEntropyLoss()
+        
+        if self.class_weights is not None:
+            loss_fct = torch.nn.CrossEntropyLoss(
+                weight=self.class_weights.to(logits.device)
+            )
+        else:
+            loss_fct = torch.nn.CrossEntropyLoss()
+            
         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
 
@@ -183,13 +194,25 @@ class LoRATrainer:
             **optimizer_kwargs
         )
 
-    def train(self, train_dataset, eval_dataset,
-              output_dir: str = "./results",
+    def train(self, 
+              train_dataset,
+              eval_dataset,
+              output_dir: str,
               model_name: str = "microsoft/deberta-v3-base") -> Dict[str, Any]:
         logger.info(f"Training on device: {self.device}, model={model_name}")
 
-        # Attempt domain detection from dataset info
-        dataset_path = getattr(train_dataset, "dataset_info", {}).get("path", "")
+        # Get dataset path correctly
+        try:
+            # Extract the actual dataset name from the cache path
+            cache_path = train_dataset.cache_files[0]['filename']
+            dataset_name = cache_path.split('/')[-4]  # Get the dataset folder name
+            dataset_path = str(Path("src/data/datasets") / dataset_name)
+            logger.info(f"Dataset path detected: {dataset_path}")
+            logger.info(f"Dataset name extracted: {dataset_name}")
+        except (AttributeError, IndexError, KeyError) as e:
+            logger.warning(f"Could not detect dataset path from dataset object: {e}")
+            dataset_path = None
+
         domain = self._detect_domain(dataset_path)
 
         # Training args
@@ -238,10 +261,22 @@ class LoRATrainer:
 
         try:
             train_result = trainer.train()
-            metrics = train_result.metrics
-            trainer.save_model()
-
-            # Save metadata
+            
+            # Fix: Check if train_result is a tuple or TrainOutput object
+            metrics = {}
+            if hasattr(train_result, 'metrics'):
+                metrics = train_result.metrics
+            elif isinstance(train_result, tuple) and len(train_result) > 0:
+                metrics = train_result[0]
+            
+            # Save model before trying to access metrics
+            try:
+                trainer.save_model()
+                logger.info(f"Model saved to {output_dir}")
+            except Exception as save_error:
+                logger.error(f"Failed to save model: {save_error}")
+            
+            # Save metadata with safe defaults
             training_metadata = {
                 "dataset_info": dataset_info,
                 "training_metrics": metrics,
@@ -251,18 +286,41 @@ class LoRATrainer:
                     "hardware_used": str(self.device)
                 }
             }
-            metadata_path = Path(output_dir) / "training_metadata.json"
-            with open(metadata_path, "w") as f:
-                json.dump(training_metadata, f, indent=2)
+            
+            try:
+                metadata_path = Path(output_dir) / "training_metadata.json"
+                with open(metadata_path, "w") as f:
+                    json.dump(training_metadata, f, indent=2)
+                logger.info(f"Saved training metadata to {metadata_path}")
+            except Exception as meta_error:
+                logger.error(f"Failed to save metadata: {meta_error}")
 
-            eval_metrics = trainer.evaluate()
-            metrics.update(eval_metrics)
+            # Evaluate with proper error handling
+            try:
+                eval_metrics = trainer.evaluate()
+                if isinstance(eval_metrics, dict):
+                    metrics.update(eval_metrics)
+            except Exception as eval_error:
+                logger.error(f"Evaluation failed: {eval_error}")
+            
             logger.info("Training completed.")
             self._log_metrics(metrics)
-            return {"status": "success", "metrics": metrics, "model_path": output_dir}
+            
+            return {
+                "status": "success",
+                "metrics": metrics,
+                "model_path": str(output_dir)
+            }
+            
         except Exception as e:
             logger.error(f"Training failed: {str(e)}")
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Error type: {type(e)}")
+            logger.error(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details available'}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "type": str(type(e))
+            }
 
     @staticmethod
     def _convert_label(example: Dict[str, Any], mapping: Dict[str, int]) -> Dict[str, Any]:
@@ -274,23 +332,27 @@ class LoRATrainer:
             logger.warning("No dataset_path; cannot detect domain.")
             return None
         
-        # Construct correct path to metrics file
-        base_path = Path(dataset_path).parent.parent.parent  # src/data
-        metrics_file = base_path / "storage" / "metrics" / f"{Path(dataset_path).name}_metrics.json"
-        
-        logger.debug(f"Looking for metrics file at: {metrics_file}")
-        
-        if metrics_file.exists():
-            try:
-                with open(metrics_file) as f:
-                    domain = json.load(f).get("domain")
-                    if domain:
-                        logger.info(f"Domain from dataset metrics: {domain}")
-                    return domain
-            except Exception as exc:
-                logger.warning(f"Could not load domain: {exc}")
-        else:
-            logger.warning(f"Metrics file not found at: {metrics_file}")
+        try:
+            # Construct path to metrics file using dataset name
+            dataset_name = Path(dataset_path).name
+            metrics_file = Path("src/data/storage/metrics") / f"{dataset_name}_metrics.json"
+            
+            logger.debug(f"Looking for metrics file at: {metrics_file}")
+            
+            if metrics_file.exists():
+                try:
+                    with open(metrics_file) as f:
+                        data = json.load(f)
+                        domain = data.get("domain")
+                        if domain:
+                            logger.info(f"Domain from dataset metrics: {domain}")
+                            return domain
+                except Exception as exc:
+                    logger.warning(f"Could not load domain from metrics file: {exc}")
+            else:
+                logger.warning(f"Metrics file not found at: {metrics_file}")
+        except Exception as e:
+            logger.error(f"Error detecting domain: {e}")
         return None
 
     def _log_label_distribution(self, dataset) -> None:

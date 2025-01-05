@@ -1,2 +1,2 @@
 -r requirements-base.txt
-bitsandbytes>=0.41.0  # Will be installed in CPU-mode on Apple Silicon 
+# MPS-specific dependencies - using standard torch optimizers 
