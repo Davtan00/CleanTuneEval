@@ -16,8 +16,30 @@ class DataProcessor:
         self.max_words = 150
         logger.info(f"Initialized DataProcessor with word limits: {self.min_words}-{self.max_words}")
         
-    def process_batch(self, data: Dict, batch_size: int = 1000) -> Dict:
-        """Process a batch of synthetic reviews with proper structure for pipeline."""
+    def process_batch(self, batch: List[Dict], domain: str) -> List[Dict]:
+        """Process a batch of reviews."""
+        try:
+            logger.info(f"Processing batch for domain: {domain}")
+            
+            # Convert batch to format expected by existing code
+            data = {
+                'domain': domain,
+                'generated_data': batch
+            }
+            
+            result = self._process_batch_internal(data)
+            
+            if result['status'] == 'success':
+                return result['data']['generated_data']
+            else:
+                raise Exception(result['message'])
+            
+        except Exception as e:
+            logger.error(f"Error in process_batch: {str(e)}")
+            raise
+    
+    def _process_batch_internal(self, data: Dict, batch_size: int = 1000) -> Dict:
+        """Internal method containing existing batch processing logic."""
         start_time = time.time()
         
         try:

@@ -1,9 +1,13 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from .processor import DataProcessor
 from .storage import DataStorage
 from .dataset_manager import DatasetManager
+from .validators import ValidationMetrics
+from .utils import generate_dataset_id
 from ..config.environment import HardwareConfig
 from ..config.logging_config import setup_logging
+import time
+from datetime import datetime
 
 logger = setup_logging()
 
@@ -16,57 +20,100 @@ class DataPipeline:
         self.dataset_manager = DatasetManager(base_path="src/data/datasets")
         logger.info("Initialized DataPipeline with all components")
     
-    def process_synthetic_data(self, data: Dict, custom_tag: Optional[str] = None, batch_size: int = 1000) -> Dict:
-        """
-        Main entry point for processing synthetic data
-        """
+    def process_synthetic_data(
+        self,
+        data: Dict,
+        custom_tag: Optional[str] = None,
+        batch_size: int = 1000
+    ) -> Dict:
+        """Process synthetic data through the pipeline with proper metrics tracking"""
         try:
-            # Process the data
-            logger.info(f"Processing synthetic data for domain: {data['domain']}")
-            process_result = self.processor.process_batch(data, batch_size=batch_size)
+            domain = data['domain']
+            start_time = time.time()  # Move time tracking to start of processing
+            logger.info(f"Processing synthetic data for domain: {domain}")
             
-            # Check for processing errors
-            if process_result['status'] != 'success':
-                logger.error(f"Processing failed: {process_result.get('message', 'Unknown error')}")
-                return process_result
+            # Initialize metrics tracking
+            metrics = ValidationMetrics()
+            processed_data = []
             
-            # Get the processed data from the result
-            processed_data = process_result['data']
+            # Process reviews in batches
+            for i in range(0, len(data['generated_data']), batch_size):
+                batch = data['generated_data'][i:i + batch_size]
+                batch_result = self.processor.process_batch(batch, domain)
+                
+                # Update metrics before filtering
+                metrics.total_processed += len(batch)
+                metrics.update_from_batch(batch_result)
+                
+                # Filter and store valid reviews
+                filtered_batch = [
+                    review for review in batch_result 
+                    if not review.get('is_removed', False)
+                ]
+                processed_data.extend(filtered_batch)
+                
+                logger.debug(f"Batch {i//batch_size + 1}: Processed {len(batch)} reviews, "
+                            f"kept {len(filtered_batch)}")
             
-            # Ensure input_file information is preserved
-            if 'input_file' in data:
-                processed_data['input_file'] = data['input_file']
-            
-            # Store processed data and metrics
-            storage_paths = self.storage.save_processed_data(
-                processed_data,
-                domain=data['domain'],
+            # Create final dataset
+            dataset_id = generate_dataset_id(
+                domain=domain,
+                data_size=len(processed_data),
                 custom_tag=custom_tag
             )
             
-            # Create dataset splits for model training
-            logger.info("Creating dataset splits for model training")
-            dataset_splits = self.dataset_manager.create_dataset(
-                data=processed_data,
-                dataset_id=storage_paths['dataset_id']
+            # Update data with filtered reviews and metrics
+            data['generated_data'] = processed_data
+            data['summary'] = {
+                'filtering_summary': metrics.to_dict(),
+                'sentiment_distribution': self._calculate_sentiment_distribution(processed_data)
+            }
+            
+            # Save processed data and get storage info
+            storage_info = self.storage.save_processed_data(
+                data=data,
+                domain=domain,
+                custom_tag=custom_tag
             )
+            
+            # Create dataset splits
+            dataset = self.dataset_manager.create_dataset(data, dataset_id)
+            
+            processing_time = time.time() - start_time
             
             return {
                 'status': 'success',
-                'data': processed_data,
-                'storage': storage_paths,
-                'dataset_info': {
-                    'id': storage_paths['dataset_id'],
-                    'path': str(self.dataset_manager.base_path / storage_paths['dataset_id']),
-                    'splits': {
-                        split: len(dataset) for split, dataset in dataset_splits.items()
-                    }
+                'data': {
+                    'generated_data': processed_data,
+                    'summary': data['summary']
                 },
-                'performance': process_result.get('performance', {})
+                'dataset_info': {
+                    'id': dataset_id,
+                    'path': str(self.dataset_manager.base_path / dataset_id),
+                    'splits': list(dataset.keys())
+                },
+                'storage': storage_info,  # Now uses consistent structure
+                'performance': {
+                    'processing_time': processing_time,
+                    'avg_time_per_review': processing_time / len(data['generated_data'])
+                }
             }
+            
         except Exception as e:
-            logger.error(f"Error in data pipeline: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+            logger.error(f"Error in pipeline: {str(e)}")
+            return {'status': 'error', 'message': str(e)}
+
+    def _calculate_sentiment_distribution(self, processed_data: List[Dict]) -> Dict[str, int]:
+        """Calculate the distribution of sentiments in processed data."""
+        distribution = {
+            'positive': 0,
+            'negative': 0,
+            'neutral': 0
+        }
+        
+        for review in processed_data:
+            sentiment = review.get('sentiment')
+            if sentiment in distribution:
+                distribution[sentiment] += 1
+                
+        return distribution

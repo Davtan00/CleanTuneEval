@@ -23,9 +23,7 @@ class DataStorage:
     
     def save_processed_data(self, data: Dict, domain: str, custom_tag: Optional[str] = None) -> Dict:
         """
-        Save processed data and metrics:
-        - Processed data goes to processed/
-        - Metrics go to metrics/
+        Save processed data and metrics with consistent return structure
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dataset_id = generate_dataset_id(
@@ -62,7 +60,7 @@ class DataStorage:
         
         return {
             "dataset_id": dataset_id,
-            "processed_path": str(processed_path),
+            "data_path": str(processed_path),
             "metrics_path": str(metrics_path)
         }
     

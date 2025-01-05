@@ -1,21 +1,24 @@
 from typing import List, Tuple, Optional
 import numpy as np
 from difflib import SequenceMatcher
-from sentence_transformers import SentenceTransformer
 from dataclasses import dataclass
 from typing import Dict, Any
 import torch
 import logging
 from datasets import DatasetDict
+from transformers import AutoModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
 class TextValidator:
     def __init__(self, config):
         self.config = config
-        logger.info("Initializing TextValidator with Sentence Transformer...")
+        logger.info("Initializing TextValidator with BERT model...")
         try:
-            self.model = SentenceTransformer('paraphrase-mpnet-base-v2')
+            # Use transformers directly instead of sentence-transformers
+            self.tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/paraphrase-mpnet-base-v2')
+            self.model = AutoModel.from_pretrained('sentence-transformers/paraphrase-mpnet-base-v2')
+            
             if self.config.use_mps:
                 logger.info("Attempting to use MPS acceleration...")
                 self.model = self.model.to('mps')
@@ -26,7 +29,45 @@ class TextValidator:
 
         # Simplified thresholds without domain specifics
         self.exact_threshold = 0.999
-        self.similarity_threshold = 0.92  # Single threshold for all duplicates
+        self.similarity_threshold = 0.92
+
+    def _encode(self, texts: List[str]) -> torch.Tensor:
+        """Encode texts to embeddings using mean pooling"""
+        # Process in smaller batches to avoid memory issues
+        batch_size =256
+        all_embeddings = []
+        
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            # Tokenize
+            encoded_input = self.tokenizer(
+                batch_texts,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors='pt'
+            )
+            
+            # Move to correct device
+            if self.config.use_mps:
+                encoded_input = {k: v.to('mps') for k, v in encoded_input.items()}
+            
+            # Get model output
+            with torch.no_grad():
+                outputs = self.model(**encoded_input)
+                
+            # Mean pooling
+            attention_mask = encoded_input['attention_mask']
+            token_embeddings = outputs.last_hidden_state
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            embeddings = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            
+            # Normalize embeddings
+            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+            all_embeddings.append(embeddings)
+        
+        # Concatenate all batches
+        return torch.cat(all_embeddings, dim=0)
 
     def _should_filter(self, text1: str, text2: str) -> Tuple[bool, Optional[str]]:
         """Simplified duplicate detection without domain specifics"""
@@ -76,13 +117,8 @@ class TextValidator:
                 chunk_results = []
                 
                 try:
-                    # Get embeddings for chunk
-                    embeddings = self.model.encode(
-                        chunk,
-                        convert_to_tensor=True,
-                        normalize_embeddings=True,
-                        show_progress_bar=False
-                    )
+                    # Get embeddings for chunk using our _encode method
+                    embeddings = self._encode(chunk)
                     
                     # Process each text in chunk
                     for j, text in enumerate(chunk):
@@ -187,7 +223,7 @@ class ValidationMetrics:
     exact_duplicates: int = 0
     near_duplicates: int = 0
     total_removed: int = 0
-    # Add these fields for quality metrics
+    # Redo implementation with new package restriction
     perplexity: float = 0.0
     similarity_score: float = 0.0
     vocabulary_richness: float = 0.0
@@ -215,3 +251,17 @@ class ValidationMetrics:
     def finalize(self) -> None:
         """Calculate final metrics."""
         self.total_removed = self.length_filtered + self.duplicates_removed
+
+    def update_from_batch(self, batch_result: List[Dict]) -> None:
+        """Update metrics from a batch of processed reviews."""
+        for review in batch_result:
+            if review.get('is_removed', False):
+                if review.get('removal_reason') == 'length':
+                    self.length_filtered += 1
+                elif review.get('removal_reason') == 'duplicate':
+                    self.duplicates_removed += 1
+                    if review.get('duplicate_type') == 'exact':
+                        self.exact_duplicates += 1
+                    elif review.get('duplicate_type') == 'similar':
+                        self.near_duplicates += 1
+        self.finalize()

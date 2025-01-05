@@ -21,16 +21,22 @@ class DatasetManager:
         split_ratios: Dict[str, float] = {"train": 0.7, "validation": 0.15, "test": 0.15},
         format_type: str = "sentiment_classification"
     ) -> DatasetDict:
-        """
-        Create a dataset with flexible formatting for different model types
-        """
+        """Create a dataset with proper filtering and re-enumeration"""
         logger.info(f"Creating dataset with ID: {dataset_id}")
         
+        # Convert to DataFrame and filter out removed reviews
         reviews_df = pd.DataFrame(data['generated_data'])
         
-        # Store original IDs and re-enumerate
-        reviews_df['original_id'] = reviews_df['id']
-        reviews_df['id'] = range(len(reviews_df))
+        # Filter out removed reviews (those marked as duplicates or low quality)
+        if 'is_removed' in reviews_df.columns:
+            original_count = len(reviews_df)
+            reviews_df = reviews_df[~reviews_df['is_removed']].copy()
+            logger.info(f"Filtered out {original_count - len(reviews_df)} removed reviews")
+        
+        # Reset index and create new sequential IDs
+        reviews_df = reviews_df.reset_index(drop=True)
+        reviews_df['original_id'] = reviews_df['id']  # Store original IDs
+        reviews_df['id'] = range(len(reviews_df))  # Create new sequential IDs
         
         # Verification of re-enumeration
         max_id = reviews_df['id'].max()
@@ -41,7 +47,7 @@ class DatasetManager:
         logger.info(f"Re-enumerated {total_reviews} reviews. Original ID range: "
                    f"{reviews_df['original_id'].min()}-{reviews_df['original_id'].max()}")
         
-        # Shuffle before creating dataset to break sentiment blocks
+        # Shuffle before creating dataset
         reviews_df = reviews_df.sample(frac=1, random_state=42).reset_index(drop=True)
         
         # Format data according to task type
@@ -71,7 +77,8 @@ class DatasetManager:
         splits.save_to_disk(save_path)
         logger.info(f"Saved dataset to {save_path}")
         
-        # Call verification once here
+        # Verify splits and distribution
+        self._verify_splits(splits)
         self._verify_label_distribution(splits)
         
         return splits
