@@ -28,6 +28,19 @@ class DatasetManager:
         
         reviews_df = pd.DataFrame(data['generated_data'])
         
+        # Store original IDs and re-enumerate
+        reviews_df['original_id'] = reviews_df['id']
+        reviews_df['id'] = range(len(reviews_df))
+        
+        # Verification of re-enumeration
+        max_id = reviews_df['id'].max()
+        total_reviews = len(reviews_df)
+        assert max_id + 1 == total_reviews, \
+            f"ID enumeration mismatch: max_id={max_id}, total_reviews={total_reviews}"
+        
+        logger.info(f"Re-enumerated {total_reviews} reviews. Original ID range: "
+                   f"{reviews_df['original_id'].min()}-{reviews_df['original_id'].max()}")
+        
         # Shuffle before creating dataset to break sentiment blocks
         reviews_df = reviews_df.sample(frac=1, random_state=42).reset_index(drop=True)
         
@@ -36,13 +49,15 @@ class DatasetManager:
             dataset_dict = {
                 'text': reviews_df['clean_text'].tolist(),
                 'labels': reviews_df['sentiment'].tolist(),
-                'id': reviews_df['id'].tolist()
+                'id': reviews_df['id'].tolist(),
+                'original_id': reviews_df['original_id'].tolist()
             }
         elif format_type == "sequence_classification":
             dataset_dict = {
                 'input_text': reviews_df['clean_text'].tolist(),
                 'label': reviews_df['sentiment'].tolist(),
-                'id': reviews_df['id'].tolist()
+                'id': reviews_df['id'].tolist(),
+                'original_id': reviews_df['original_id'].tolist()
             }
         else:
             raise ValueError(f"Unsupported format type: {format_type}")

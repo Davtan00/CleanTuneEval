@@ -1,0 +1,11 @@
+{
+    "r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.1,
+    "bias": "none",
+    "target_modules": [
+      "query_proj",
+      "value_proj"
+    ]
+  }
+  
