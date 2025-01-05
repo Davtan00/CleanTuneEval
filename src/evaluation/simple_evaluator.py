@@ -143,6 +143,6 @@ class SimpleEvaluator:
 evaluator = SimpleEvaluator()
 results = evaluator.evaluate_pair(
     lora_model_path="src/models/storage/deberta-v3-base/lora/three_way/20250105_115544",
-    test_dataset_path="src/data/datasets/ecommerce_7k_20250105_015001_REAL"
+    test_dataset_path="src/data/datasets/digitec"
 )
 """ 

@@ -2,7 +2,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 from .metrics import MetricsCalculator
-from ..models.adaptation import ModelAdaptation
+from ..models.adaptation import ModelAdapter
 from ..config.environment import HardwareConfig
 from ..config.logging_config import setup_logging
 
@@ -21,7 +21,7 @@ class ModelEvaluator:
         
     def evaluate_model(
         self,
-        model: ModelAdaptation,
+        model: ModelAdapter,
         test_data: Dict,
         domain: str,
         synthetic_ratio: Optional[float] = None
@@ -77,7 +77,7 @@ class CrossDomainEvaluator:
     
     def run_cross_domain_evaluation(
         self,
-        model: ModelAdaptation,
+        model: ModelAdapter,
         domain_datasets: Dict[str, Dict],
         synthetic_ratios: Optional[List[float]] = None
     ) -> Dict:

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from ..config.environment import HardwareConfig
 from ..data.pipeline import DataPipeline
-from ..models.adaptation import ModelAdaptation
+from ..models.adaptation import ModelAdapter
 from ..evaluation.evaluator import CrossDomainEvaluator
 from ..config.logging_config import setup_logging
 
@@ -27,7 +27,7 @@ app.add_middleware(
 logger.info("Initializing API components")
 hardware_config = HardwareConfig.detect_hardware()
 data_pipeline = DataPipeline()
-model_adapter = ModelAdaptation(hardware_config)
+model_adapter = ModelAdapter()
 evaluator = CrossDomainEvaluator(
     hardware_config=hardware_config,
     labels=["negative", "neutral", "positive"]
