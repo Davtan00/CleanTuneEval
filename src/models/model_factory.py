@@ -67,14 +67,13 @@ class ModelFactory:
                 target_modules=lora_params["target_modules"]
             )
         else:
-            # Fallback defaults
             lora_config = LoraConfig(
                 r=8,
-                lora_alpha=32,
-                lora_dropout=0.05,
+                lora_alpha=16,
+                lora_dropout=0.1,
                 bias="none",
                 task_type="SEQ_CLS",
-                target_modules=["query_proj", "key_proj"],
+                target_modules=["query_proj", "value_proj"],  
             )
 
         model = get_peft_model(base_model, lora_config)

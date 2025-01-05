@@ -35,52 +35,152 @@ class LoRATrainer:
     Orchestrates LoRA fine-tuning with domain-based weighting, dynamic hyperparams,
     multi-metric evaluation, and training metadata logging.
     """
-    def __init__(self, model_factory: ModelFactory):
+    def __init__(self, 
+                 model_factory: ModelFactory,
+                 config_dir: str = "src/models/config"):
+        """
+        Initialize trainer with mandatory configuration files.
+        
+        Args:
+            model_factory: ModelFactory instance
+            config_dir: Directory containing configuration files
+        
+        Raises:
+            FileNotFoundError: If either config file is missing
+            ValueError: If configs are invalid
+        """
         self.model_factory = model_factory
         self.device = self.model_factory.get_device()
         self.class_weights = None
+        
+        # Load mandatory configurations
+        lora_config_path = Path(config_dir) / "lora_config.json"
+        training_config_path = Path(config_dir) / "training_config.json"
+        
+        if not lora_config_path.exists():
+            raise FileNotFoundError(f"LoRA config not found at {lora_config_path}")
+        if not training_config_path.exists():
+            raise FileNotFoundError(f"Training config not found at {training_config_path}")
+            
+        # Load and validate configs
+        try:
+            with open(lora_config_path) as f:
+                self.lora_config = json.load(f)
+            with open(training_config_path) as f:
+                self.training_config = json.load(f)
+                
+            # Validate required fields
+            self._validate_configs()
+            
+            logger.info("Successfully loaded LoRA and training configurations")
+            logger.debug(f"LoRA config: {self.lora_config}")
+            logger.debug(f"Training config: {self.training_config}")
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in config files: {str(e)}")
+            
+    def _validate_configs(self):
+        """Ensure all required configuration fields are present."""
+        required_lora_fields = {"r", "lora_alpha", "lora_dropout", "bias", "target_modules"}
+        required_training_fields = {
+            "model_name_or_path", "num_train_epochs", "per_device_train_batch_size",
+            "learning_rate", "weight_decay"
+        }
+        
+        missing_lora = required_lora_fields - set(self.lora_config.keys())
+        missing_training = required_training_fields - set(self.training_config.keys())
+        
+        if missing_lora:
+            raise ValueError(f"Missing required LoRA config fields: {missing_lora}")
+        if missing_training:
+            raise ValueError(f"Missing required training config fields: {missing_training}")
 
     def setup_training_args(self, output_dir: str, dataset_size: int, domain: Optional[str] = None) -> TrainingArguments:
         """
-        Dynamically set hyperparams (batch size, epochs) based on dataset_size.
-        Domain-based weighting if hardware config says 'use_research_weights'.
+        Set up training arguments using values from training_config.json.
+        Falls back to calculated defaults only if values are missing.
+        
+        Args:
+            output_dir: Directory to save model outputs
+            dataset_size: Size of training dataset
+            domain: Optional domain for weight calculation
         """
-        use_fp16 = (self.device.type == "cuda")
-        if dataset_size < 10000:
-            batch_size, grad_accum, num_epochs, eval_steps = 32, 2, 5, 100
-        elif dataset_size < 50000:
-            batch_size, grad_accum, num_epochs, eval_steps = 24, 4, 3, 200
-        else:
-            batch_size, grad_accum, num_epochs, eval_steps = 16, 8, 2, 500
+        # Get values from training config
+        batch_size = self.training_config.get("per_device_train_batch_size")
+        learning_rate = self.training_config.get("learning_rate")
+        num_epochs = self.training_config.get("num_train_epochs")
+        weight_decay = self.training_config.get("weight_decay", 0.01)
+        
+        # Only calculate defaults if not specified in config
+        if not batch_size:
+            if dataset_size < 10000:
+                batch_size = 32
+            elif dataset_size < 50000:
+                batch_size = 24
+            else:
+                batch_size = 16
+            logger.info(f"Batch size not specified in config, using calculated value: {batch_size}")
+        
+        # Adjust batch size for MPS
         if self.device.type == "mps":
             batch_size = min(batch_size, 24)
+            logger.info(f"Adjusted batch size for MPS: {batch_size}")
 
-        # Domain-based weighting
+        # Handle domain-based weighting
         if domain and getattr(self.model_factory.hardware, 'use_research_weights', False):
             analyzer = SentimentDistributionAnalyzer()
             w = analyzer.get_domain_weights(domain)
             logger.info(f"Using domain-based weights for '{domain}': {w}")
             self.class_weights = torch.tensor(w).to(self.device)
 
+        # Determine optimizer settings based on hardware
+        optimizer_kwargs = {}
+        if self.model_factory.hardware.optimizer_type == "cuda":
+            try:
+                import bitsandbytes as bnb
+                optimizer_kwargs = {
+                    "optim": "adamw_bnb_8bit",
+                    "fp16": True
+                }
+                logger.info("Using 8-bit AdamW optimizer with CUDA")
+            except ImportError:
+                optimizer_kwargs = {
+                    "optim": "adamw_torch",
+                    "fp16": True
+                }
+                logger.warning("Bitsandbytes not available, falling back to torch AdamW with CUDA")
+        elif self.model_factory.hardware.optimizer_type == "mps":
+            optimizer_kwargs = {
+                "optim": "adamw_torch",
+                "fp16": False  # MPS doesn't support fp16 training
+            }
+            logger.info("Using torch AdamW optimizer with MPS")
+        else:
+            optimizer_kwargs = {
+                "optim": "adamw_torch",
+                "fp16": False
+            }
+            logger.info("Using torch AdamW optimizer with CPU")
+
         return TrainingArguments(
             output_dir=output_dir,
-            learning_rate=2e-4,
+            learning_rate=learning_rate,
             per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=grad_accum,
+            per_device_eval_batch_size=batch_size,
             num_train_epochs=num_epochs,
-            warmup_ratio=0.1,
-            weight_decay=0.01,
-            evaluation_strategy="epoch",
-            save_strategy="epoch",
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_combined_metric",
-            greater_is_better=True,
-            fp16=use_fp16,
+            weight_decay=weight_decay,
+            warmup_ratio=self.training_config.get("warmup_ratio", 0.1),
+            evaluation_strategy=self.training_config.get("evaluation_strategy", "epoch"),
+            save_strategy=self.training_config.get("save_strategy", "epoch"),
+            load_best_model_at_end=self.training_config.get("load_best_model_at_end", True),
+            metric_for_best_model=self.training_config.get("metric_for_best_model", "eval_combined_metric"),
+            greater_is_better=self.training_config.get("greater_is_better", True),
             logging_dir="logs",
-            logging_steps=eval_steps,
+            logging_steps=self.training_config.get("logging_steps", 50),
             dataloader_num_workers=0,
             dataloader_pin_memory=False if self.device.type == "mps" else True,
-            report_to="none"
+            report_to="none",
+            **optimizer_kwargs
         )
 
     def train(self, train_dataset, eval_dataset,
@@ -173,7 +273,13 @@ class LoRATrainer:
         if not dataset_path:
             logger.warning("No dataset_path; cannot detect domain.")
             return None
-        metrics_file = Path(dataset_path).parent.parent / "metrics" / f"{Path(dataset_path).name}_metrics.json"
+        
+        # Construct correct path to metrics file
+        base_path = Path(dataset_path).parent.parent.parent  # src/data
+        metrics_file = base_path / "storage" / "metrics" / f"{Path(dataset_path).name}_metrics.json"
+        
+        logger.debug(f"Looking for metrics file at: {metrics_file}")
+        
         if metrics_file.exists():
             try:
                 with open(metrics_file) as f:
@@ -183,6 +289,8 @@ class LoRATrainer:
                     return domain
             except Exception as exc:
                 logger.warning(f"Could not load domain: {exc}")
+        else:
+            logger.warning(f"Metrics file not found at: {metrics_file}")
         return None
 
     def _log_label_distribution(self, dataset) -> None:
