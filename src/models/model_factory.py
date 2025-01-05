@@ -24,7 +24,7 @@ class ModelFactory:
             model_name: Base model identifier.
             lora_config_path: Path to a LoRA JSON config (optional).
         """
-        self.hardware = HardwareConfig.detect_hardware()
+        self.hardware = HardwareConfig()
         self.model_name = model_name
         self.lora_config_path = lora_config_path
         self.device = self.get_device()

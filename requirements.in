@@ -1,0 +1,37 @@
+# Core Dependencies (order matters)
+huggingface-hub>=0.24.0
+transformers>=4.47.1
+optimum>=1.23.3
+
+
+torch>=2.5.1
+peft>=0.14.0
+accelerate>=0.27.0
+datasets>=3.2.0
+safetensors>=0.5.0
+tokenizers>=0.21.0
+
+# Data Processing
+pandas>=2.2.3
+numpy>=2.2.1
+scikit-learn>=1.6.0
+
+# API and Server
+fastapi>=0.109.2
+uvicorn>=0.27.1
+python-multipart>=0.0.6
+
+# Testing
+pytest>=8.0.0
+httpx>=0.26.0
+
+# Monitoring and Logging
+wandb>=0.16.2
+loguru>=0.7.2
+
+# Type Checking
+pydantic>=2.6.1
+
+# Additional Requirements
+bitsandbytes>=0.42.0
+tqdm>=4.65.0
