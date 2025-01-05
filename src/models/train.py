@@ -3,10 +3,10 @@ from datasets import load_from_disk
 from pathlib import Path
 import logging
 from typing import Dict, Any, Optional, Literal
-from .adaptation import ModelAdapter
-from .lora_config import LoRAParameters
-from ..config.logging_config import setup_logging
 from datetime import datetime
+from .model_factory import ModelFactory
+from .lora_trainer import LoRATrainer
+from ..config.logging_config import setup_logging
 
 # Set tokenizer parallelism explicitly
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -17,37 +17,26 @@ class ModelTrainer:
     def __init__(self, 
                  base_model: str = "microsoft/deberta-v3-base",
                  tuning_method: str = "lora",
-                 classification_type: Literal["binary", "three_way"] = "three_way"):
-        """
-        Initialize trainer with flexible model configuration
-        
-        Args:
-            base_model: Base model identifier (e.g., "microsoft/deberta-v3-base", "roberta-base")
-            tuning_method: Fine-tuning method (e.g., "lora", "full", "prefix")
-            classification_type: Type of sentiment classification
-        """
-        self.base_path = Path(__file__).parent.parent
+                 classification_type: str = "three_way"):
         self.base_model = base_model
         self.tuning_method = tuning_method
         self.classification_type = classification_type
         
-        # Create timestamp for unique model versioning
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create structured output path: 
-        # models/storage/{model_name}/{tuning_method}/{classification_type}/{timestamp}
-        model_name = base_model.split('/')[-1]
-        self.model_save_dir = (self.base_path / "models/storage" 
-                             / model_name 
-                             / tuning_method 
-                             / classification_type
-                             / timestamp)
-        
-        self.adapter = ModelAdapter()
-        
-    def train(self, 
-              dataset_path: str,
-              lora_params: Optional[LoRAParameters] = None) -> Dict[str, Any]:
+        # Initialize model adapter based on tuning method
+        if tuning_method == "lora":
+            model_factory = ModelFactory(model_name=base_model)
+            self.adapter = LoRATrainer(model_factory)
+        else:
+            raise ValueError(f"Unsupported tuning method: {tuning_method}")
+            
+        # Setup model save directory
+        self.model_save_dir = Path("src/models/storage") / \
+                             Path(base_model).name / \
+                             tuning_method / \
+                             classification_type / \
+                             datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    def train(self, dataset_path: str) -> Dict[str, Any]:
         """
         Train model using specified configuration
         """
@@ -60,38 +49,42 @@ class ModelTrainer:
             
         logger.info(f"Dataset loaded with {len(dataset['train'])} training samples")
         
-        if lora_params is None:
-            lora_params = LoRAParameters(
-                r=16,                     
-                lora_alpha=32,            
-                lora_dropout=0.1,         
-                task_type="SEQ_CLS"       
-            )
-        
-        # Create output directory if it doesn't exist
-        self.model_save_dir.mkdir(parents=True, exist_ok=True)
-        
         # Train model
         logger.info(f"Starting training with configuration:")
         logger.info(f"Base model: {self.base_model}")
         logger.info(f"Tuning method: {self.tuning_method}")
         logger.info(f"Classification: {self.classification_type}")
         
-        result = self.adapter.adapt_model(
+        result = self.adapter.train(
             train_dataset=dataset["train"],
             eval_dataset=dataset["validation"],
             output_dir=str(self.model_save_dir),
-            lora_params=lora_params
+            model_name=self.base_model
         )
         
-        if result["status"] == "success":
-            logger.info(f"Training completed successfully")
-            logger.info(f"Model saved at: {self.model_save_dir}")
-            logger.info("Metrics:")
-            for metric_name, value in result["metrics"].items():
-                logger.info(f"{metric_name}: {value}")
-        
         return result
+
+def validate_dataset_splits(dataset):
+    """Check for potential data quality issues"""
+    train_texts = set(dataset['train']['text'])
+    val_texts = set(dataset['validation']['text'])
+    
+    # Check overlap
+    overlap = train_texts.intersection(val_texts)
+    overlap_percentage = len(overlap) / len(val_texts) * 100
+    
+    logger.info("\nDataset Validation:")
+    logger.info(f"Train samples: {len(train_texts)}")
+    logger.info(f"Val samples: {len(val_texts)}")
+    logger.info(f"Overlap: {len(overlap)} samples ({overlap_percentage:.2f}%)")
+    
+    # Sample check
+    if len(overlap) > 0:
+        logger.warning("Example overlapping texts:")
+        for text in list(overlap)[:3]:
+            logger.warning(f"- {text[:100]}...")
+            
+    return overlap_percentage < 1  # Flag if overlap > 1%
 
 def train_model(dataset_path: str,
                 base_model: str = "microsoft/deberta-v3-base",
@@ -105,7 +98,29 @@ def train_model(dataset_path: str,
         tuning_method=tuning_method,
         classification_type=classification_type
     )
-    return trainer.train(dataset_path)
+    result = trainer.train(dataset_path)
+    
+    # Add completion summary
+    if result["status"] == "success":
+        logger.info("\n" + "="*50)
+        logger.info("Training Completed Successfully!")
+        logger.info("="*50)
+        logger.info(f"Model saved at: {trainer.model_save_dir}")
+        logger.info("\nFinal Metrics:")
+        logger.info(f"Accuracy: {result['metrics']['eval_accuracy']:.4f}")
+        logger.info(f"Macro F1: {result['metrics']['eval_macro_f1']:.4f}")
+        logger.info("\nPer-class F1 Scores:")
+        logger.info(f"Negative: {result['metrics']['eval_negative_f1']:.4f}")
+        logger.info(f"Neutral:  {result['metrics']['eval_neutral_f1']:.4f}")
+        logger.info(f"Positive: {result['metrics']['eval_positive_f1']:.4f}")
+        logger.info("\nConfusion Matrix:")
+        for row in result['metrics']['eval_confusion_matrix']:
+            logger.info(str(row))
+        logger.info("="*50)
+    else:
+        logger.error(f"Training failed: {result['message']}")
+
+    return result
 
 if __name__ == "__main__":
     import argparse

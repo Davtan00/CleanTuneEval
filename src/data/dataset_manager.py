@@ -27,6 +27,9 @@ class DatasetManager:
         
         reviews_df = pd.DataFrame(data['generated_data'])
         
+        # Shuffle before creating dataset to break sentiment blocks
+        reviews_df = reviews_df.sample(frac=1, random_state=42).reset_index(drop=True)
+        
         # Format data according to task type
         if format_type == "sentiment_classification":
             dataset_dict = {
@@ -35,7 +38,6 @@ class DatasetManager:
                 'id': reviews_df['id'].tolist()
             }
         elif format_type == "sequence_classification":
-            # Different format for other classification models
             dataset_dict = {
                 'input_text': reviews_df['clean_text'].tolist(),
                 'label': reviews_df['sentiment'].tolist(),
@@ -44,11 +46,9 @@ class DatasetManager:
         else:
             raise ValueError(f"Unsupported format type: {format_type}")
 
-        # Create initial dataset
+        # Create dataset with stratified splits
         dataset = Dataset.from_dict(dataset_dict)
-        
-        # Create splits
-        splits = self._create_splits(dataset, split_ratios)
+        splits = self._create_stratified_splits(dataset, split_ratios)
         
         # Save dataset
         save_path = self.base_path / dataset_id
@@ -57,53 +57,43 @@ class DatasetManager:
         
         return splits
 
-    def _create_splits(
+    def _create_stratified_splits(
         self,
         dataset: Dataset,
         split_ratios: Dict[str, float]
     ) -> DatasetDict:
-        """
-        Create train/validation/test splits with flexible ratios
-        """
-        # Validate ratios
-        total = sum(split_ratios.values())
-        if not abs(total - 1.0) < 1e-6:
-            raise ValueError(f"Split ratios must sum to 1, got {total}")
-
-        # Create initial train/test split
-        test_size = split_ratios['test']
-        train_val = dataset.train_test_split(
-            test_size=test_size,
-            shuffle=True,
-            seed=42
+        """Create stratified splits maintaining sentiment distribution"""
+        # Get labels for stratification
+        labels = dataset['labels']
+        
+        # Create stratified splits
+        train_idx, test_idx = train_test_split(
+            range(len(dataset)),
+            test_size=split_ratios['test'],
+            stratify=labels,
+            random_state=42
         )
-
-        # If we have a validation split
+        
         if 'validation' in split_ratios:
-            # Calculate validation size relative to remaining data
-            remaining_data_ratio = 1 - test_size
-            val_size = split_ratios['validation'] / remaining_data_ratio
-            
-            # Split training data into train/validation
-            train_val_split = train_val['train'].train_test_split(
-                test_size=val_size,
-                shuffle=True,
-                seed=42
+            # Further split train into train/val
+            train_labels = [labels[i] for i in train_idx]
+            train_final_idx, val_idx = train_test_split(
+                train_idx,
+                test_size=split_ratios['validation']/(1-split_ratios['test']),
+                stratify=train_labels,
+                random_state=42
             )
             
-            splits = DatasetDict({
-                'train': train_val_split['train'],
-                'validation': train_val_split['test'],
-                'test': train_val['test']
+            return DatasetDict({
+                'train': dataset.select(train_final_idx),
+                'validation': dataset.select(val_idx),
+                'test': dataset.select(test_idx)
             })
         else:
-            splits = DatasetDict({
-                'train': train_val['train'],
-                'test': train_val['test']
+            return DatasetDict({
+                'train': dataset.select(train_idx),
+                'test': dataset.select(test_idx)
             })
-
-        logger.info(f"Created splits with sizes: {splits}")
-        return splits
 
     def load_dataset(
         self,
