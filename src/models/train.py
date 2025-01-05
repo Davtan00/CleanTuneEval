@@ -17,10 +17,12 @@ class ModelTrainer:
     def __init__(self, 
                  base_model: str = "microsoft/deberta-v3-base",
                  tuning_method: str = "lora",
-                 classification_type: str = "three_way"):
+                 classification_type: str = "three_way",
+                 use_research_weights: bool = False):
         self.base_model = base_model
         self.tuning_method = tuning_method
         self.classification_type = classification_type
+        self.use_research_weights = use_research_weights
         
         # Initialize model adapter based on tuning method
         if tuning_method == "lora":
@@ -89,14 +91,16 @@ def validate_dataset_splits(dataset):
 def train_model(dataset_path: str,
                 base_model: str = "microsoft/deberta-v3-base",
                 tuning_method: str = "lora",
-                classification_type: str = "three_way"):
+                classification_type: str = "three_way",
+                use_research_weights: bool = False):
     """
     Convenience function for training models
     """
     trainer = ModelTrainer(
         base_model=base_model,
         tuning_method=tuning_method,
-        classification_type=classification_type
+        classification_type=classification_type,
+        use_research_weights=use_research_weights
     )
     result = trainer.train(dataset_path)
     
@@ -127,8 +131,9 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Train a model with LoRA adaptation')
     parser.add_argument('--dataset', type=str, 
-                       default="src/data/datasets/technology_7k_20250104_194358_adjusted_ccc",
                        help='Path to the dataset')
+    parser.add_argument('--use-research-weights', action='store_true',
+                       help='Use domain-specific research weights during training')
     parser.add_argument('--debug', action='store_true',
                        help='Print debug information about the dataset')
     

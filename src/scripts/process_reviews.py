@@ -30,6 +30,8 @@ def main():
                        help='Batch size for processing (default: 1000)')
     parser.add_argument('--use-mps', action='store_true', 
                        help='Use MPS acceleration on Apple Silicon')
+    parser.add_argument('--preserve-distribution', action='store_true',
+                       help='Preserve original data distribution (for evaluation datasets)')
     
     args = parser.parse_args()
     
@@ -43,7 +45,8 @@ def main():
             device='mps' if args.use_mps else 'cpu',
             n_cores=14,  # M4 Pro core count
             memory_limit=48,  # 48GB RAM
-            use_mps=args.use_mps
+            use_mps=args.use_mps,
+            preserve_distribution=args.preserve_distribution
         )
         
         # Load input data with validation

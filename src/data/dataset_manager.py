@@ -4,6 +4,7 @@ import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from ..config.logging_config import setup_logging
+import numpy as np
 
 logger = setup_logging()
 
@@ -54,6 +55,9 @@ class DatasetManager:
         save_path = self.base_path / dataset_id
         splits.save_to_disk(save_path)
         logger.info(f"Saved dataset to {save_path}")
+        
+        # Call verification once here
+        self._verify_label_distribution(splits)
         
         return splits
 
@@ -136,3 +140,33 @@ class DatasetManager:
             return dataset  # BERT uses the default format
         else:
             raise ValueError(f"Unsupported model type: {model_type}") 
+
+    def _verify_splits(self, splits: DatasetDict) -> bool:
+        """Verify no overlap between splits"""
+        train_ids = set(splits['train']['id'])
+        val_ids = set(splits['validation']['id'])
+        test_ids = set(splits['test']['id'])
+        
+        overlaps = {
+            'train-val': len(train_ids.intersection(val_ids)),
+            'train-test': len(train_ids.intersection(test_ids)),
+            'val-test': len(val_ids.intersection(test_ids))
+        }
+        
+        for split_pair, overlap in overlaps.items():
+            if overlap > 0:
+                logger.warning(f"Found {overlap} overlapping IDs between {split_pair}")
+                return False
+        return True 
+
+    def _verify_label_distribution(self, splits: DatasetDict) -> None:
+        """Log label distribution for each split"""
+        for split_name, split in splits.items():
+            labels = split['labels']
+            unique, counts = np.unique(labels, return_counts=True)
+            dist = dict(zip(unique, counts))
+            percentages = {k: v/len(labels)*100 for k, v in dist.items()}
+            logger.info(f"{split_name} distribution: {percentages}")
+        
+        # Remove this line that causes recursion
+        # self._verify_label_distribution(splits)  # This line is causing the recursion! 

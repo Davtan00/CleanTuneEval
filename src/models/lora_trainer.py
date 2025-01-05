@@ -7,6 +7,7 @@ from ..evaluation.metrics import compute_classification_metrics
 from torch.utils.data import DataLoader, Sampler
 import numpy as np
 from .weights import SentimentDistributionAnalyzer
+from transformers.trainer_callback import TrainerCallback
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,8 @@ class LoRATrainer:
         self.model_factory = model_factory
         self.device = self.model_factory.get_device()
         
-    def setup_training_args(self, output_dir: str, dataset_size: int) -> TrainingArguments:
-        """Dynamically configure training arguments based on dataset size"""
+    def setup_training_args(self, output_dir: str, dataset_size: int, domain: str = None) -> TrainingArguments:
+        """Dynamically configure training arguments based on dataset size and domain"""
         use_fp16 = self.device.type == "cuda"
         
         # Dynamic parameter calculation (as before)
@@ -40,6 +41,16 @@ class LoRATrainer:
         if self.device.type == "mps":
             batch_size = min(batch_size, 24)
         
+        # Get weights based on domain research if requested
+        if domain and hasattr(self.model_factory.hardware, 'use_research_weights') and self.model_factory.hardware.use_research_weights:
+            analyzer = SentimentDistributionAnalyzer()
+            weights = analyzer.get_domain_weights(domain)
+            logger.info(f"Using research-based weights for {domain} domain: {weights}")
+            class_weights = torch.tensor(weights)
+        else:
+            class_weights = None
+            logger.info("No domain-specific weights applied")
+        
         return TrainingArguments(
             output_dir=output_dir,
             learning_rate=2e-4,          # Higher learning rate for LoRA
@@ -59,6 +70,7 @@ class LoRATrainer:
             dataloader_num_workers=0,
             dataloader_pin_memory=False if self.device.type == "mps" else True,
             report_to="none",
+            class_weights=class_weights,
         )
         
     def train(self, 
@@ -123,13 +135,35 @@ class LoRATrainer:
         train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         eval_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         
+        # Add callback for loss monitoring
+        class DetailedLossCallback(TrainerCallback):
+            def __init__(self):
+                self.train_losses = []
+                self.eval_losses = []
+                
+            def on_log(self, args, state, control, logs=None, **kwargs):
+                if logs:
+                    step = state.global_step
+                    if 'loss' in logs:
+                        self.train_losses.append((step, logs['loss']))
+                        logger.info(f"Step {step} - Train loss: {logs['loss']:.4f}")
+                    if 'eval_loss' in logs:
+                        self.eval_losses.append((step, logs['eval_loss']))
+                        logger.info(f"Step {step} - Eval loss: {logs['eval_loss']:.4f}")
+                        
+                    # Log loss difference if both available
+                    if 'loss' in logs and 'eval_loss' in logs:
+                        diff = abs(logs['loss'] - logs['eval_loss'])
+                        logger.info(f"Loss difference: {diff:.4f}")
+        
         trainer = Trainer(
             model=model,
             args=self.setup_training_args(output_dir, dataset_size),
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            compute_metrics=compute_classification_metrics
+            compute_metrics=compute_classification_metrics,
+            callbacks=[DetailedLossCallback()]
         )
         
         try:

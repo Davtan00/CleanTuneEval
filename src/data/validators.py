@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Any
 import torch
 import logging
+from datasets import DatasetDict
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,50 @@ class TextValidator:
         total_words = len(words)
         
         return unique_words / total_words
+
+    def check_cross_split_similarity(
+        self,
+        splits: DatasetDict,
+        threshold: float = 0.98
+    ) -> Dict[str, List[Tuple[str, str, float]]]:
+        """Check for near-duplicates across splits"""
+        results = {}
+        split_pairs = [('train', 'validation'), ('train', 'test'), ('validation', 'test')]
+        
+        for split1, split2 in split_pairs:
+            texts1 = splits[split1]['text']
+            texts2 = splits[split2]['text']
+            
+            # Use existing embeddings functionality
+            embeddings1 = self.model.encode(texts1, convert_to_tensor=True, normalize_embeddings=True)
+            embeddings2 = self.model.encode(texts2, convert_to_tensor=True, normalize_embeddings=True)
+            
+            similarities = []
+            for i, emb1 in enumerate(embeddings1):
+                for j, emb2 in enumerate(embeddings2):
+                    sim = float(torch.dot(emb1, emb2))
+                    if sim > threshold:
+                        similarities.append((texts1[i], texts2[j], sim))
+            
+            results[f"{split1}-{split2}"] = similarities
+        
+        return results
+
+    def validate_text_complexity(self, text: str) -> Dict[str, float]:
+        """Validate text complexity using multiple metrics"""
+        # Existing vocabulary richness
+        vocab_richness = self.compute_vocabulary_richness(text)
+        
+        # Add sentence structure variety
+        sentences = text.split('.')
+        avg_sentence_length = np.mean([len(s.split()) for s in sentences if s.strip()])
+        sentence_length_std = np.std([len(s.split()) for s in sentences if s.strip()])
+        
+        return {
+            'vocabulary_richness': vocab_richness,
+            'avg_sentence_length': avg_sentence_length,
+            'sentence_length_variation': sentence_length_std
+        }
 
 @dataclass
 class ValidationMetrics:
