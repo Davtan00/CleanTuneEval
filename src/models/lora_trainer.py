@@ -8,6 +8,10 @@ from torch.utils.data import DataLoader, Sampler
 import numpy as np
 from .weights import SentimentDistributionAnalyzer
 from transformers.trainer_callback import TrainerCallback
+from pathlib import Path
+import json
+from datetime import datetime
+from transformers import AutoConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +24,6 @@ class LoRATrainer:
         """Dynamically configure training arguments based on dataset size and domain"""
         use_fp16 = self.device.type == "cuda"
         
-        # Dynamic parameter calculation (as before)
         if dataset_size < 10000:
             batch_size = 32
             grad_accum = 2
@@ -41,19 +44,19 @@ class LoRATrainer:
         if self.device.type == "mps":
             batch_size = min(batch_size, 24)
         
-        # Get weights based on domain research if requested
+        # Store weights for use in custom trainer
+        self.class_weights = None
         if domain and hasattr(self.model_factory.hardware, 'use_research_weights') and self.model_factory.hardware.use_research_weights:
             analyzer = SentimentDistributionAnalyzer()
             weights = analyzer.get_domain_weights(domain)
             logger.info(f"Using research-based weights for {domain} domain: {weights}")
-            class_weights = torch.tensor(weights)
+            self.class_weights = torch.tensor(weights).to(self.device)
         else:
-            class_weights = None
             logger.info("No domain-specific weights applied")
         
         return TrainingArguments(
             output_dir=output_dir,
-            learning_rate=2e-4,          # Higher learning rate for LoRA
+            learning_rate=2e-4,
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=grad_accum,
             num_train_epochs=num_epochs,
@@ -62,15 +65,14 @@ class LoRATrainer:
             evaluation_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="accuracy",  # Using accuracy as primary metric
+            metric_for_best_model="accuracy",
             greater_is_better=True,
             fp16=use_fp16,
             logging_dir="logs",
             logging_steps=eval_steps,
             dataloader_num_workers=0,
             dataloader_pin_memory=False if self.device.type == "mps" else True,
-            report_to="none",
-            class_weights=class_weights,
+            report_to="none"
         )
         
     def train(self, 
@@ -81,6 +83,28 @@ class LoRATrainer:
         
         logger.info(f"Training on device: {self.device}")
         logger.info(f"Using model: {model_name}")
+        
+        # Extract domain from dataset path
+        dataset_path = getattr(train_dataset, "dataset_info", {}).get("path", "")
+        domain = None
+        
+        # Try to get domain from metrics file
+        if dataset_path:
+            metrics_file = Path(dataset_path).parent.parent / "metrics" / f"{Path(dataset_path).name}_metrics.json"
+            if metrics_file.exists():
+                try:
+                    with open(metrics_file) as f:
+                        metrics_data = json.load(f)
+                        domain = metrics_data.get("domain")
+                        logger.info(f"Detected domain from dataset metrics: {domain}")
+                except Exception as e:
+                    logger.warning(f"Could not load domain from metrics file: {e}")
+        
+        if not domain:
+            logger.warning("No domain detected! Training will proceed without class weights.")
+        
+        # Pass domain to setup_training_args
+        training_args = self.setup_training_args(output_dir, len(train_dataset), domain=domain)
         
         # Get dataset size for dynamic configuration
         dataset_size = len(train_dataset)
@@ -105,8 +129,23 @@ class LoRATrainer:
         for label, (count, percentage) in enumerate(zip(label_counts, label_percentages)):
             logger.info(f"Label {label}: {count} samples ({percentage:.2f}%)")
         
+        # Get dataset info before training
+        dataset_info = {
+            "dataset_path": getattr(train_dataset, "dataset_info", {}).get("path", "unknown"),
+            "dataset_name": Path(getattr(train_dataset, "dataset_info", {}).get("path", "unknown")).name,
+            "train_samples": len(train_dataset),
+            "eval_samples": len(eval_dataset),
+            "label_distribution": {
+                str(label): int(count) for label, count in zip(range(len(label_counts)), label_counts)
+            },
+            "training_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
         # Basic model setup
         model, tokenizer = self.model_factory.create_model()
+        
+        # Store dataset info in model config
+        model.config.custom_dataset_info = dataset_info
         
         # Standard preprocessing
         def preprocess_function(examples):
@@ -156,9 +195,10 @@ class LoRATrainer:
                         diff = abs(logs['loss'] - logs['eval_loss'])
                         logger.info(f"Loss difference: {diff:.4f}")
         
-        trainer = Trainer(
+        trainer = WeightedLossTrainer(
+            class_weights=self.class_weights,
             model=model,
-            args=self.setup_training_args(output_dir, dataset_size),
+            args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
@@ -169,7 +209,26 @@ class LoRATrainer:
         try:
             train_result = trainer.train()
             metrics = train_result.metrics
+            
+            # Save model with updated config
             trainer.save_model()
+            
+            # Also save a separate JSON with more detailed info
+            training_metadata = {
+                "dataset_info": dataset_info,
+                "training_metrics": metrics,
+                "model_config": {
+                    "base_model": model_name,
+                    "training_method": "lora",
+                    "hardware_used": str(self.device)
+                }
+            }
+            
+            metadata_path = Path(output_dir) / "training_metadata.json"
+            with open(metadata_path, "w") as f:
+                json.dump(training_metadata, f, indent=2)
+            
+            logger.info(f"Training metadata saved to: {metadata_path}")
             
             eval_metrics = trainer.evaluate()
             metrics.update(eval_metrics)
@@ -203,3 +262,50 @@ class LoRATrainer:
                 logger.info(f"{name}: {value:.4f}")
             else:
                 logger.info(f"{name}: {value}") 
+
+    @staticmethod
+    def get_training_info(model_path: str) -> Dict[str, Any]:
+        """
+        Retrieve training information for a saved model.
+        
+        Args:
+            model_path: Path to the saved model directory
+        
+        Returns:
+            Dict containing dataset and training information
+        """
+        try:
+            # Try to load the detailed metadata file first
+            metadata_path = Path(model_path) / "training_metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path) as f:
+                    return json.load(f)
+            
+            # Fallback to config-only info
+            config = AutoConfig.from_pretrained(model_path)
+            if hasattr(config, "custom_dataset_info"):
+                return {"dataset_info": config.custom_dataset_info}
+            
+            return {"error": "No training information found"}
+            
+        except Exception as e:
+            return {"error": f"Failed to load training info: {str(e)}"} 
+
+class WeightedLossTrainer(Trainer):
+    def __init__(self, class_weights=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        
+        if self.class_weights is not None:
+            loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        else:
+            loss_fct = torch.nn.CrossEntropyLoss()
+            
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        
+        return (loss, outputs) if return_outputs else loss 

@@ -168,5 +168,13 @@ class DatasetManager:
             percentages = {k: v/len(labels)*100 for k, v in dist.items()}
             logger.info(f"{split_name} distribution: {percentages}")
         
-        # Remove this line that causes recursion
-        # self._verify_label_distribution(splits)  # This line is causing the recursion! 
+    def verify_dataset_structure(self, dataset_path: str):
+        """Verify dataset structure after creation"""
+        dataset = load_from_disk(dataset_path)
+        for split in dataset.keys():
+            logger.info(f"Split {split}:")
+            logger.info(f"- Size: {len(dataset[split])}")
+            logger.info(f"- Features: {dataset[split].features}")
+            logger.info(f"- First few IDs: {dataset[split]['id'][:5]}")
+        
+        

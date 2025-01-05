@@ -138,3 +138,11 @@ class DataProcessor:
             vocabulary_richness=vocab_richness,
             is_outlier=False  # Will be updated in batch
         ) 
+    
+    def process_reviews(self, reviews: List[Dict]) -> List[Dict]:
+        """Process and filter reviews"""
+        processed = []
+        for review in reviews:
+            if meets_criteria(review):  # This removes reviews but keeps original IDs
+                processed.append(review)
+        return processed 

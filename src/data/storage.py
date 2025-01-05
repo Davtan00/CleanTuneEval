@@ -35,6 +35,12 @@ class DataStorage:
             timestamp=timestamp
         )
         
+        # Add source file information to the data
+        data['source_info'] = {
+            'original_file': Path(data.get('input_file', 'unknown')).name,
+            'processing_timestamp': timestamp
+        }
+        
         # Save processed data
         processed_path = self.base_path / "processed" / f"{dataset_id}.json"
         with open(processed_path, 'w') as f:

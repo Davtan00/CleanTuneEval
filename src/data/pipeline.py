@@ -33,6 +33,10 @@ class DataPipeline:
             # Get the processed data from the result
             processed_data = process_result['data']
             
+            # Ensure input_file information is preserved
+            if 'input_file' in data:
+                processed_data['input_file'] = data['input_file']
+            
             # Store processed data and metrics
             storage_paths = self.storage.save_processed_data(
                 processed_data,
