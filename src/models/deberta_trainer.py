@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 import numpy as np
-from typing import Dict
+from typing import Dict, Any
 
 import torch
 from datasets import load_from_disk, DatasetDict
@@ -18,14 +18,16 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from .config.training_utils import TrainingConfigurator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DebertaTrainer:
     """
-    Expects a dictionary for LoRA config (lora_config) and another for training config (training_config).
-    These must be fully specified in JSON files, with no CLI override. 
+    Expects a dictionary for LoRA config (lora_config) and another for
+    training config (training_config). These must be fully specified
+    in JSON files, with no CLI override.
     """
 
     def __init__(
@@ -58,7 +60,7 @@ class DebertaTrainer:
         # Convert LoRA dict to actual config object
         self.lora_config = self._create_lora_config(self.lora_config_dict)
 
-        # Hard-coded label mapping
+        # Hard-coded label mapping for 3-way sentiment
         self.label2id = {"negative": 0, "neutral": 1, "positive": 2}
 
     def _load_dataset_metrics(self) -> Dict:
@@ -76,7 +78,7 @@ class DebertaTrainer:
     def _create_lora_config(self, config_dict: Dict) -> LoraConfig:
         """
         Convert the provided dictionary into a LoraConfig object.
-        Throws an error if any required keys for LoRA are missing.
+        Raises an error if any required keys for LoRA are missing.
         """
         try:
             return LoraConfig(**config_dict)
@@ -85,7 +87,7 @@ class DebertaTrainer:
             raise ValueError(f"Failed to create LoraConfig: {e}")
 
     def _initialize_tokenizer(self):
-        logger.info(f"Initializing tokenizer: {self.model_name}")
+        logger.info(f"Initializing tokenizer for {self.model_name}")
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
@@ -122,6 +124,8 @@ class DebertaTrainer:
                 max_length=128
             )
             label_str = example["labels"]
+            logger.debug(f"Processing label: {label_str}")
+
             if label_str not in self.label2id:
                 raise ValueError(
                     f"Unexpected label '{label_str}'. "
@@ -131,11 +135,17 @@ class DebertaTrainer:
             return tokenized
 
         for split_name in dataset_dict.keys():
+            logger.info(f"Processing {split_name} split...")
             dataset_dict[split_name] = dataset_dict[split_name].map(process, batched=False)
             dataset_dict[split_name].set_format(
                 type="torch",
                 columns=["input_ids", "attention_mask", "labels"]
             )
+            print(dataset_dict["validation"].column_names)
+
+            unique_labels = dataset_dict[split_name]["labels"].unique()
+            logger.info(f"Unique labels in {split_name}: {unique_labels}")
+            
         return dataset_dict
 
     def _create_model(self):
@@ -151,54 +161,81 @@ class DebertaTrainer:
 
     def _setup_training_args(self) -> TrainingArguments:
         """
-        Construct TrainingArguments from the user-provided training_config.
-        Filters out non-training arguments like model_name_or_path.
+        Build TrainingArguments with platform-specific optimizations.
         """
         dataset = load_from_disk(self.dataset_path)
         train_size = len(dataset["train"])
         logger.info(f"Training set size: {train_size} samples")
 
-        # Some default values can be set here; they can also be overridden by JSON.
+        device_type = self.hardware_config.optimizer_type  # "cuda", "cpu", or "mps"
+        optimizer_config = TrainingConfigurator.get_optimizer_config(device_type)
+        
         args_dict = {
             "output_dir": str(self.output_dir),
             "evaluation_strategy": "epoch",
             "save_strategy": "epoch",
             "report_to": "none",
             "load_best_model_at_end": True,
+            **optimizer_config
         }
 
-        # Filter out non-training config parameters and merge in user-provided config
-        training_params = {k: v for k, v in self.training_config.items() 
-                         if k not in ["model_name_or_path"]}  # exclude model path
-        args_dict.update(training_params)
-
-        # Ensure mandatory fields
-        required_keys = ["num_train_epochs", "learning_rate"]
-        for k in required_keys:
-            if k not in args_dict:
-                raise ValueError(f"training_config.json must include '{k}'")
+        user_params = {
+            k: v for k, v in self.training_config.items() 
+            if k not in ["model_name_or_path"]
+        }
+        args_dict.update(user_params)
 
         return TrainingArguments(**args_dict)
 
     def _compute_metrics(self, p: EvalPrediction) -> Dict[str, float]:
         """
-        Standard classification metrics: accuracy, precision, recall, F1 (macro).
+        Compute combined_metric = 0.7 * macro-F1 + 0.3 * accuracy
+        along with basic metrics (accuracy, precision, recall, f1).
+        The HF Trainer will see them as "eval_accuracy", "eval_f1", etc.
+        but we reference "eval_combined_metric" in training_config.json.
         """
-        preds = np.argmax(p.predictions, axis=1)
-        labels = p.label_ids
-        accuracy = accuracy_score(labels, preds)
-        precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="macro")
-        return {
-            "accuracy": accuracy,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1
-        }
+        logger.info("Inside _compute_metrics, about to compute accuracy, f1, etc.")
+        try:
+            # Unpack predictions
+            if isinstance(p.predictions, tuple):
+                logits = p.predictions[0]
+            else:
+                logits = p.predictions
+
+            preds = np.argmax(logits, axis=1)
+            labels = p.label_ids
+
+            accuracy_val = accuracy_score(labels, preds)
+            precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+                labels, preds, average="macro", zero_division=0
+            )
+
+            # Our new combined metric
+            combined_metric = 0.7 * f1_macro + 0.3 * accuracy_val
+
+            metrics = {
+                "accuracy": float(accuracy_val),
+                "precision": float(precision_macro),
+                "recall": float(recall_macro),
+                "f1": float(f1_macro),
+                "combined_metric": float(combined_metric)
+            }
+
+            logger.debug(f"Computed metrics: {metrics}")
+            return metrics
+
+        except Exception as e:
+            logger.error(f"Error computing metrics: {e}")
+            raise
 
     def train(self) -> Dict:
         """
-        Executes the entire training process: load, tokenize, train, evaluate.
-        Returns a dictionary with status and results.
+        The end-to-end training process:
+        1. Load dataset and tokenizer
+        2. Preprocess
+        3. Build LoRA model
+        4. Instantiate Trainer w/ a combined metric
+        5. Train and evaluate on test set
         """
         try:
             dataset_dict = load_from_disk(self.dataset_path)
@@ -219,9 +256,11 @@ class DebertaTrainer:
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
             )
 
+            # Train
             train_result = trainer.train()
-            test_metrics = trainer.evaluate(dataset_dict["test"])
 
+            # Evaluate on test
+            test_metrics = trainer.evaluate(dataset_dict["test"])
             self._save_results(train_result, test_metrics)
 
             return {
@@ -229,14 +268,14 @@ class DebertaTrainer:
                 "test_metrics": test_metrics,
                 "model_path": str(self.output_dir)
             }
+
         except Exception as e:
             logger.error(f"Training failed: {e}")
             return {"status": "error", "message": str(e)}
 
     def _save_results(self, train_result, test_metrics):
         """
-        Save training and evaluation metadata to a JSON file.
-        Handles non-serializable objects by converting them to serializable types.
+        Save relevant metadata and results. 
         """
         def make_json_serializable(obj):
             if isinstance(obj, (set, frozenset)):
@@ -249,8 +288,8 @@ class DebertaTrainer:
                 return obj.__dict__
             return obj
 
-        # Convert metrics to serializable format
-        train_metrics = train_result.metrics if hasattr(train_result, 'metrics') else {}
+        # Convert training metrics
+        train_metrics = getattr(train_result, "metrics", {})
         if callable(train_metrics):
             train_metrics = train_metrics()
 
@@ -270,7 +309,7 @@ class DebertaTrainer:
             }
         }
         out_path = self.output_dir / "training_metadata.json"
-        with open(out_path, 'w') as f:
+        with open(out_path, "w") as f:
             json.dump(meta, f, indent=2, default=make_json_serializable)
 
     @staticmethod

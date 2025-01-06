@@ -8,6 +8,7 @@ from datasets import load_from_disk
 
 from src.models.deberta_trainer import DebertaTrainer
 from src.config.logging_config import setup_logging
+from src.config.environment import HardwareConfig
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -126,6 +127,9 @@ def main():
     if not verify_environment():
         logger.error("Environment verification failed. Terminating.")
         return 1
+    
+    hardware_config = HardwareConfig()
+    #hardware_config.check_mps_limitations()
 
     # 2. Dataset validation
     dataset_path = validate_dataset_path(args.dataset_path)
@@ -142,7 +146,8 @@ def main():
         trainer = DebertaTrainer(
             dataset_path=str(dataset_path),
             lora_config=lora_config,
-            training_config=training_config
+            training_config=training_config,
+            hardware_config=hardware_config
         )
     except Exception as e:
         logger.exception(f"Failed to initialize trainer: {e}")

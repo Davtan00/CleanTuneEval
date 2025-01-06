@@ -2,7 +2,6 @@ import subprocess
 import sys
 import os
 from pathlib import Path
-import torch
 import platform
 
 def check_system():
@@ -21,27 +20,55 @@ def check_system():
 def check_torch_installation():
     """Verify PyTorch installation and available devices."""
     print("\n=== PyTorch Configuration ===")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
-    print(f"Is MPS available? {torch.backends.mps.is_available()}")
-    print(f"Is CUDA available? {torch.cuda.is_available()}")
+    try:
+        import torch
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
+        print(f"Is MPS available? {torch.backends.mps.is_available()}")
+        print(f"Is CUDA available? {torch.cuda.is_available()}")
+    except ImportError:
+        print("PyTorch not yet installed")
+
+def install_base_torch(is_apple_silicon):
+    """Install the base PyTorch version needed for dependency resolution."""
+    print("\nInstalling base PyTorch...")
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pip", "install",
+            "torch==2.5.1", "torchvision", "torchaudio",
+            "--index-url", "https://download.pytorch.org/whl/cpu"
+        ], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing PyTorch: {e}")
+        return False
 
 def setup_requirements():
     """Set up requirements files for different platforms."""
     print("\n=== Setting up requirements ===")
     
-    # Ensure pip and pip-tools are up to date
-    subprocess.run([
-        sys.executable, "-m", "pip", "install", "--upgrade", "pip", "pip-tools"
-    ])
+    # First, ensure we have pip-tools without assuming it exists
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "--upgrade", "pip"
+        ], check=True)
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "pip-tools"
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing pip-tools: {e}")
+        return False
     
-    # Generate base requirements.txt
+    # Generate base requirements.txt without hardware-specific packages
     print("\nGenerating base requirements.txt...")
     try:
         subprocess.run([
             "pip-compile",
             "requirements.in",
             "--upgrade",
+            "--strip-extras",
+            # Exclude hardware-specific packages from base requirements
+            "--constraint", "constraints.txt",
             "--output-file", "requirements.txt"
         ], check=True)
     except subprocess.CalledProcessError as e:
@@ -52,27 +79,28 @@ def setup_requirements():
     requirements_dir = Path('requirements')
     requirements_dir.mkdir(exist_ok=True)
     
-    # Create platform-specific requirements manually
     platform_specs = {
         'cpu': """# CPU-specific requirements
 -r ../requirements.txt
 torch==2.5.1
-torchvision
-torchaudio
+torchvision==0.20.1
+torchaudio==2.5.1
 --index-url https://download.pytorch.org/whl/cpu
 """,
         'cuda': """# CUDA-specific requirements
 -r ../requirements.txt
 torch==2.5.1
-torchvision
-torchaudio
+torchvision==0.20.1
+torchaudio==2.5.1
+bitsandbytes>=0.42.0  # Only for CUDA
 --index-url https://download.pytorch.org/whl/cu118
 """,
         'mps': """# MPS-specific requirements (Apple Silicon)
 -r ../requirements.txt
 torch==2.5.1
-torchvision
-torchaudio
+torchvision==0.20.1
+torchaudio==2.5.1
+# Note: bitsandbytes is installed but won't have GPU support
 --index-url https://download.pytorch.org/whl/cpu
 """
     }
@@ -94,33 +122,33 @@ def install_dependencies(is_apple_silicon):
     """Install dependencies based on platform."""
     print("\n=== Installing Dependencies ===")
     
-    # First uninstall potentially conflicting packages
-    subprocess.run([
-        sys.executable, "-m", "pip", "uninstall", "-y",
-        "torch", "torchvision", "torchaudio"
-    ])
-    
-    # Install base requirements first
+    # Install base requirements first (this includes most dependencies)
+    print("\nInstalling base requirements...")
     subprocess.run([
         sys.executable, "-m", "pip", "install", "-r", "requirements.txt"
     ])
     
-    # Install platform-specific PyTorch
+    # Now handle PyTorch specifically for the platform
+    print("\nInstalling platform-specific PyTorch...")
     if is_apple_silicon:
-        print("\nInstalling PyTorch for Apple Silicon...")
+        print("Installing PyTorch for Apple Silicon...")
         subprocess.run([
             sys.executable, "-m", "pip", "install",
             "torch==2.5.1", "torchvision", "torchaudio",
             "--index-url", "https://download.pytorch.org/whl/cpu"  # CPU build works with MPS
         ])
     else:
+        # Import torch here since it should be installed by now
+        import torch
         if torch.cuda.is_available():
+            print("Installing CUDA-enabled PyTorch...")
             subprocess.run([
                 sys.executable, "-m", "pip", "install",
                 "torch==2.5.1", "torchvision", "torchaudio",
                 "--index-url", "https://download.pytorch.org/whl/cu118"
             ])
         else:
+            print("Installing CPU-only PyTorch...")
             subprocess.run([
                 sys.executable, "-m", "pip", "install",
                 "torch==2.5.1", "torchvision", "torchaudio",
@@ -147,6 +175,30 @@ def verify_installation():
         except ImportError as e:
             print(f"✗ Error importing {package}: {e}")
 
+def verify_mps_compatibility():
+    """Verify MPS compatibility for critical operations."""
+    try:
+        import torch
+        if not torch.backends.mps.is_available():
+            return
+            
+        device = torch.device('mps')
+        
+        # Test basic tensor operations
+        a = torch.ones(2, 2).to(device)
+        b = torch.ones(2, 2).to(device)
+        _ = torch.matmul(a, b)
+        print("✓ Basic tensor operations work on MPS")
+        
+        # Test neural network operations
+        x = torch.randn(1, 3, 224, 224).to(device)
+        conv = torch.nn.Conv2d(3, 64, 3).to(device)
+        _ = conv(x)
+        print("✓ Neural network operations work on MPS")
+        
+    except Exception as e:
+        print(f"⚠️  MPS compatibility issue detected: {e}")
+
 def main():
     """Main setup function."""
     print("Starting environment setup...")
@@ -160,9 +212,28 @@ def main():
         print("Setup cancelled.")
         return
     
-    setup_requirements()
+    # Install base PyTorch first (needed for dependency resolution)
+    if not install_base_torch(is_apple_silicon):
+        print("Failed to install base PyTorch. Exiting.")
+        return
+    
+    if not setup_requirements():
+        print("Failed to setup requirements. Exiting.")
+        return
+        
     install_dependencies(is_apple_silicon)
     verify_installation()
+    
+    if is_apple_silicon:
+        verify_mps_compatibility()
+        # Only import HardwareConfig after all dependencies are installed
+        try:
+            from src.config.environment import HardwareConfig
+            hardware_config = HardwareConfig()
+            hardware_config.check_mps_limitations()
+        except ImportError as e:
+            print(f"Note: Could not import HardwareConfig: {e}")
+            print("This is expected if src package is not in PYTHONPATH")
     
     print("\nSetup complete! Please restart your Python environment.")
 
