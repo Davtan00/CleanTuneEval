@@ -1,0 +1,5 @@
+# Exclude these from base requirements as they're platform-specific
+torch
+torchvision
+torchaudio
+bitsandbytes 

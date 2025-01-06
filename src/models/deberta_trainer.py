@@ -1,3 +1,5 @@
+# File: /Users/davidtanner/Documents/GitHub/CleanTuneEval/src/models/deberta_trainer.py
+
 import os
 import json
 from datetime import datetime
@@ -28,17 +30,21 @@ class DebertaTrainer:
     Expects a dictionary for LoRA config (lora_config) and another for
     training config (training_config). These must be fully specified
     in JSON files, with no CLI override.
+
+    Now also takes an optional `hardware_config`, which must be passed
+    if we need platform-specific optimizer settings.
     """
 
     def __init__(
         self,
         dataset_path: str,
         lora_config: Dict,
-        training_config: Dict
+        training_config: Dict,
+        hardware_config=None
     ):
         self.dataset_path = Path(dataset_path)
 
-        # The training config must include a model_name_or_path for the base model
+        # The training config must include a model_name_or_path
         if "model_name_or_path" not in training_config:
             raise ValueError("training_config.json must contain 'model_name_or_path'")
 
@@ -56,6 +62,7 @@ class DebertaTrainer:
         # Store config details
         self.lora_config_dict = lora_config
         self.training_config = training_config
+        self.hardware_config = hardware_config  # Store hardware config
 
         # Convert LoRA dict to actual config object
         self.lora_config = self._create_lora_config(self.lora_config_dict)
@@ -161,13 +168,21 @@ class DebertaTrainer:
 
     def _setup_training_args(self) -> TrainingArguments:
         """
-        Build TrainingArguments with platform-specific optimizations.
+        Build TrainingArguments with platform-specific optimizations,
+        using the hardware_config if provided.
         """
         dataset = load_from_disk(self.dataset_path)
         train_size = len(dataset["train"])
         logger.info(f"Training set size: {train_size} samples")
 
-        device_type = self.hardware_config.optimizer_type  # "cuda", "cpu", or "mps"
+        # Use hardware_config's optimizer_type if available
+        if self.hardware_config:
+            device_type = self.hardware_config.optimizer_type  # "cuda", "cpu", or "mps"
+        else:
+            # Fallback to local check if hardware_config is missing
+            device_type = self._get_device()
+
+        # Retrieve platform-specific config
         optimizer_config = TrainingConfigurator.get_optimizer_config(device_type)
         
         args_dict = {
@@ -196,7 +211,6 @@ class DebertaTrainer:
         """
         logger.info("Inside _compute_metrics, about to compute accuracy, f1, etc.")
         try:
-            # Unpack predictions
             if isinstance(p.predictions, tuple):
                 logits = p.predictions[0]
             else:

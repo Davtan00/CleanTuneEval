@@ -1,6 +1,7 @@
 # MPS-specific requirements (Apple Silicon)
 -r ../requirements.txt
 torch==2.5.1
-torchvision
-torchaudio
+torchvision==0.20.1
+torchaudio==2.5.1
+# Note: bitsandbytes is installed but won't have GPU support
 --index-url https://download.pytorch.org/whl/cpu

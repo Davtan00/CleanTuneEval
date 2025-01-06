@@ -1,6 +1,7 @@
 # CUDA-specific requirements
 -r ../requirements.txt
 torch==2.5.1
-torchvision
-torchaudio
+torchvision==0.20.1
+torchaudio==2.5.1
+bitsandbytes>=0.42.0  # Only for CUDA
 --index-url https://download.pytorch.org/whl/cu118
