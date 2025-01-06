@@ -4,6 +4,7 @@ transformers>=4.47.1
 sentencepiece>=0.1.99
 optimum>=1.23.3
 sentence-transformers>=2.2.2
+protobuf>=4.25.2
 
 # These will be handled by platform-specific requirements
 # torch>=2.5.1

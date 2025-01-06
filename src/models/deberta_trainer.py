@@ -62,7 +62,14 @@ class DebertaTrainer:
         # Store config details
         self.lora_config_dict = lora_config
         self.training_config = training_config
-        self.hardware_config = hardware_config  # Store hardware config
+        if hardware_config is None:
+            raise ValueError(
+                "hardware_config is required. Initialize HardwareConfig "
+                "from environment.py before creating DebertaTrainer."
+            )
+        self.hardware_config = hardware_config
+        self.device = torch.device(hardware_config.device)
+        logger.info(f"Using device from hardware_config: {self.device}")
 
         # Convert LoRA dict to actual config object
         self.lora_config = self._create_lora_config(self.lora_config_dict)
@@ -157,13 +164,34 @@ class DebertaTrainer:
 
     def _create_model(self):
         """
-        Load the base DeBERTa model and apply LoRA adapters.
+        Load the base DeBERTa model and apply LoRA adapters with explicit gradient setup.
         """
         base_model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
             num_labels=3
         )
+        # Move to device before LoRA adaptation
+        base_model = base_model.to(self.device)
+        
+        # Ensure gradients are enabled
+        for param in base_model.parameters():
+            param.requires_grad_(True)
+        
         model = get_peft_model(base_model, self.lora_config)
+        
+        # Double-check gradients after LoRA
+        trainable_params = 0
+        all_param = 0
+        for param in model.parameters():
+            num_params = param.numel()
+            all_param += num_params
+            if param.requires_grad:
+                trainable_params += num_params
+        logger.info(
+            f"trainable params: {trainable_params} || "
+            f"all params: {all_param} || "
+            f"trainable%: {100 * trainable_params / all_param}"
+        )
         return model
 
     def _setup_training_args(self) -> TrainingArguments:
@@ -175,14 +203,9 @@ class DebertaTrainer:
         train_size = len(dataset["train"])
         logger.info(f"Training set size: {train_size} samples")
 
-        # Use hardware_config's optimizer_type if available
-        if self.hardware_config:
-            device_type = self.hardware_config.optimizer_type  # "cuda", "cpu", or "mps"
-        else:
-            # Fallback to local check if hardware_config is missing
-            device_type = self._get_device()
+        # Use hardware_config directly - it's required in __init__
+        device_type = self.hardware_config.optimizer_type
 
-        # Retrieve platform-specific config
         optimizer_config = TrainingConfigurator.get_optimizer_config(device_type)
         
         args_dict = {
@@ -315,7 +338,7 @@ class DebertaTrainer:
             "training_config": {
                 "model_name_or_path": self.model_name,
                 "lora_config": self.lora_config_dict,
-                "device": str(self._get_device())
+                "device": str(self.device)
             },
             "results": {
                 "train_metrics": {k: make_json_serializable(v) for k, v in train_metrics.items()},
@@ -325,11 +348,3 @@ class DebertaTrainer:
         out_path = self.output_dir / "training_metadata.json"
         with open(out_path, "w") as f:
             json.dump(meta, f, indent=2, default=make_json_serializable)
-
-    @staticmethod
-    def _get_device() -> str:
-        if torch.cuda.is_available():
-            return "cuda"
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"

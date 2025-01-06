@@ -73,8 +73,7 @@ class TrainingConfigurator:
             "fp16": False,
             "dataloader_pin_memory": False,
             "gradient_checkpointing": True,
-            "gradient_accumulation_steps": 2,
-            "per_device_train_batch_size": min(base_config["per_device_train_batch_size"], 32)
+            "gradient_accumulation_steps": 2
         }
     
     @staticmethod
