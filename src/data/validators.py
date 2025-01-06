@@ -7,94 +7,38 @@ import torch
 import logging
 from datasets import DatasetDict
 from transformers import AutoModel, AutoTokenizer
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
 class TextValidator:
     def __init__(self, config):
         self.config = config
-        logger.info("Initializing TextValidator with BERT model...")
+        logger.info("Initializing TextValidator with SentenceTransformer...")
+        
         try:
-            # Use transformers directly instead of sentence-transformers
-            self.tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/paraphrase-mpnet-base-v2')
-            self.model = AutoModel.from_pretrained('sentence-transformers/paraphrase-mpnet-base-v2')
+            # Initialize SentenceTransformer
+            self.model = SentenceTransformer('sentence-transformers/paraphrase-mpnet-base-v2')
             
-            if self.config.use_mps:
-                logger.info("Attempting to use MPS acceleration...")
-                self.model = self.model.to('mps')
-            logger.info("Model loaded successfully")
+            # Handle device placement
+            if self.config.use_mps and torch.backends.mps.is_available():
+                logger.info("Using MPS acceleration...")
+                self.model.to('mps')
+            elif torch.cuda.is_available() and not self.config.force_cpu:
+                logger.info("Using CUDA acceleration...")
+                self.model.to('cuda')
+            else:
+                logger.info("Using CPU processing...")
+                self.model.to('cpu')
+                
+            logger.info("SentenceTransformer loaded successfully")
         except Exception as e:
             logger.error(f"Error loading model: {str(e)}")
             raise
 
-        # Simplified thresholds without domain specifics
+        # Thresholds remain the same
         self.exact_threshold = 0.999
         self.similarity_threshold = 0.92
-
-    def _encode(self, texts: List[str]) -> torch.Tensor:
-        """Encode texts to embeddings using mean pooling"""
-        # Process in smaller batches to avoid memory issues
-        batch_size =256
-        all_embeddings = []
-        
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            # Tokenize
-            encoded_input = self.tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
-                max_length=512,
-                return_tensors='pt'
-            )
-            
-            # Move to correct device
-            if self.config.use_mps:
-                encoded_input = {k: v.to('mps') for k, v in encoded_input.items()}
-            
-            # Get model output
-            with torch.no_grad():
-                outputs = self.model(**encoded_input)
-                
-            # Mean pooling
-            attention_mask = encoded_input['attention_mask']
-            token_embeddings = outputs.last_hidden_state
-            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-            embeddings = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-            
-            # Normalize embeddings
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            all_embeddings.append(embeddings)
-        
-        # Concatenate all batches
-        return torch.cat(all_embeddings, dim=0)
-
-    def _should_filter(self, text1: str, text2: str) -> Tuple[bool, Optional[str]]:
-        """Simplified duplicate detection without domain specifics"""
-        # Normalize texts
-        text1 = ' '.join(text1.lower().strip().split())
-        text2 = ' '.join(text2.lower().strip().split())
-        
-        # Exact match check first
-        if text1 == text2:
-            return True, 'exact'
-            
-        # Get embeddings and calculate similarity
-        try:
-            embeddings = self.model.encode([text1, text2], 
-                                         convert_to_tensor=True,
-                                         normalize_embeddings=True)
-            
-            similarity = float(np.dot(embeddings[0], embeddings[1]))
-            len_ratio = min(len(text1), len(text2)) / max(len(text1), len(text2))
-            
-            if similarity >= self.similarity_threshold and len_ratio > 0.7:
-                return True, 'similar'
-                
-        except Exception as e:
-            logger.error(f"Error during similarity calculation: {e}")
-            
-        return False, None
 
     def detect_duplicates(self, texts: List[str]) -> List[Tuple[bool, Optional[str]]]:
         """Detect duplicates with enhanced error handling and logging."""
@@ -117,8 +61,8 @@ class TextValidator:
                 chunk_results = []
                 
                 try:
-                    # Get embeddings for chunk using our _encode method
-                    embeddings = self._encode(chunk)
+                    # Get embeddings for entire chunk at once
+                    embeddings = self.model.encode(chunk, convert_to_tensor=True, normalize_embeddings=True)
                     
                     # Process each text in chunk
                     for j, text in enumerate(chunk):
@@ -144,8 +88,7 @@ class TextValidator:
                         chunk_results.append((should_filter, filter_type))
                         
                 except Exception as e:
-                    logger.error(f"Error processing chunk {i//chunk_size}: {str(e)}")
-                    # Return safe results for this chunk
+                    logger.error(f"Error processing chunk: {str(e)}")
                     chunk_results.extend([(False, None)] * len(chunk))
                     
                 results.extend(chunk_results)
@@ -155,7 +98,6 @@ class TextValidator:
             
         except Exception as e:
             logger.error(f"Error in detect_duplicates: {str(e)}")
-            # Return safe default results
             return [(False, None)] * len(texts)
 
     def compute_vocabulary_richness(self, text: str) -> float:
