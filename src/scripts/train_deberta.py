@@ -6,6 +6,7 @@ import os
 from datasets import load_from_disk
 from src.models.deberta_trainer import DebertaTrainer
 from src.config.logging_config import setup_logging
+import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -20,59 +21,59 @@ def parse_args():
     parser.add_argument(
         "dataset_path",
         type=str,
-        help="Path to the HuggingFace dataset directory (e.g., src/data/datasets/technology_7k_*)"
+        help="Path to the HuggingFace dataset directory"
     )
+    parser.add_argument("--model-name", type=str, default="microsoft/deberta-v3-base")
     
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default="microsoft/deberta-v3-base",
-        help="Base model to use (default: microsoft/deberta-v3-base)"
-    )
+    # Existing LoRA overrides
+    parser.add_argument("--lora-rank", type=int, default=None)
+    parser.add_argument("--lora-alpha", type=int, default=None)
+    parser.add_argument("--lora-dropout", type=float, default=None)
     
-    parser.add_argument(
-        "--lora-rank",
-        type=int,
-        default=None,
-        help="Rank for LoRA adaptation (if not specified, uses trainer defaults)"
-    )
-    
-    parser.add_argument(
-        "--lora-alpha",
-        type=int,
-        default=None,
-        help="Alpha scaling for LoRA (if not specified, uses trainer defaults)"
-    )
-    
-    parser.add_argument(
-        "--lora-dropout",
-        type=float,
-        default=None,
-        help="Dropout for LoRA layers (if not specified, uses trainer defaults)"
-    )
-    
+    # Extended: specify config files
+    parser.add_argument("--config-lora", type=str, default=None,
+                        help="Path to a custom lora_config.json")
+    parser.add_argument("--config-training", type=str, default=None,
+                        help="Path to a custom training_config.json")
+
+    # Basic training overrides
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--learning-rate", type=float, default=None)
+
     return parser.parse_args()
 
+def load_lora_config(config_path: str) -> dict:
+    if not config_path:
+        return {}
+    path = Path(config_path)
+    if not path.exists():
+        logger.warning(f"Provided LoRA config path does not exist: {path}")
+        return {}
+    with open(path, 'r') as f:
+        return json.load(f)
+
+def load_training_config(config_path: str) -> dict:
+    if not config_path:
+        return {}
+    path = Path(config_path)
+    if not path.exists():
+        logger.warning(f"Provided training config path does not exist: {path}")
+        return {}
+    with open(path, 'r') as f:
+        return json.load(f)
+
 def validate_dataset_path(dataset_path: str) -> Optional[Path]:
-    """
-    Validate that the dataset path exists and has the expected structure.
-    Also enforces the presence of the columns:
-        ['text', 'labels', 'id', 'original_id']
-    in each split (train, validation, test).
-    """
     path = Path(dataset_path)
     if not path.exists():
         logger.error(f"Dataset path does not exist: {path}")
         return None
         
-    # Check for required HF dataset structure
     required_items = ["dataset_dict.json", "train", "validation", "test"]
     missing_items = [item for item in required_items if not (path / item).exists()]
     if missing_items:
         logger.error(f"Dataset at {path} is missing required items: {missing_items}")
         return None
     
-    # Load dataset and check columns
     dataset = load_from_disk(str(path))
     required_columns = ["text", "labels", "id", "original_id"]
     for split_name in ["train", "validation", "test"]:
@@ -83,32 +84,26 @@ def validate_dataset_path(dataset_path: str) -> Optional[Path]:
         for col in required_columns:
             if col not in split_cols:
                 logger.error(
-                    f"Dataset split '{split_name}' does not contain the required column '{col}'. "
-                    f"Found columns: {split_cols}"
+                    f"Dataset split '{split_name}' lacks '{col}'. Found columns: {split_cols}"
                 )
                 return None
     return path
 
 def verify_environment():
-    """Verify that all required packages are installed with correct versions."""
     try:
         import pkg_resources
-        
         requirements = {
             'transformers': '4.47.1',
             'sentencepiece': '0.1.99',
             'tokenizers': '0.21.0'
         }
-        
         for package, min_version in requirements.items():
             installed = pkg_resources.get_distribution(package).version
             if pkg_resources.parse_version(installed) < pkg_resources.parse_version(min_version):
                 logger.warning(
-                    f"{package} version {installed} is installed, but {min_version} or higher "
-                    "is recommended for DeBERTa v3"
+                    f"{package} version {installed} is installed, but {min_version} or higher is recommended."
                 )
         return True
-        
     except Exception as e:
         logger.error(f"Environment verification failed: {e}")
         return False
@@ -116,47 +111,48 @@ def verify_environment():
 def main():
     args = parse_args()
     
-    # Verify environment first
     if not verify_environment():
         logger.error("Environment verification failed. Please check your dependencies.")
         return 1
     
-    # Validate dataset path & columns
     dataset_path = validate_dataset_path(args.dataset_path)
     if dataset_path is None:
         return 1
-    
-    # Only create lora_config if ALL LoRA parameters are explicitly specified
-    lora_config = None
-    if all(v is not None for v in [args.lora_rank, args.lora_alpha, args.lora_dropout]):
-        lora_config = {
-            "r": args.lora_rank,
-            "lora_alpha": args.lora_alpha,
-            "lora_dropout": args.lora_dropout,
-            "bias": "none",
-            "task_type": "SEQ_CLS"
-        }
-        logger.info("Using custom LoRA configuration")
-    else:
-        if any(v is not None for v in [args.lora_rank, args.lora_alpha, args.lora_dropout]):
-            logger.warning("Partial LoRA configuration provided. Using trainer defaults instead.")
-        else:
-            logger.info("No LoRA configuration provided. Using trainer defaults.")
-    
+
+    # Load config files if specified
+    lora_config_dict = load_lora_config(args.config_lora)
+    training_config_dict = load_training_config(args.config_training)
+
+    # Merge partial CLI overrides into the LoRA config
+    if args.lora_rank is not None:
+        lora_config_dict["r"] = args.lora_rank
+    if args.lora_alpha is not None:
+        lora_config_dict["lora_alpha"] = args.lora_alpha
+    if args.lora_dropout is not None:
+        lora_config_dict["lora_dropout"] = args.lora_dropout
+    if lora_config_dict:
+        # ensure essential fields
+        lora_config_dict.setdefault("bias", "none")
+        lora_config_dict.setdefault("task_type", "SEQ_CLS")
+
+    # Merge CLI overrides into training config
+    if args.epochs is not None:
+        training_config_dict["num_train_epochs"] = args.epochs
+    if args.learning_rate is not None:
+        training_config_dict["learning_rate"] = args.learning_rate
+
+    logger.info(f"Initializing DeBERTa trainer with model: {args.model_name}")
     try:
-        # Initialize trainer
-        logger.info(f"Initializing DeBERTa trainer with model: {args.model_name}")
         trainer = DebertaTrainer(
             dataset_path=str(dataset_path),
             model_name=args.model_name,
-            lora_config=lora_config  # Will be None if not all params specified
+            lora_config=lora_config_dict if lora_config_dict else None,
+            training_config=training_config_dict if training_config_dict else None
         )
         
-        # Train model
         logger.info("Starting training...")
         result = trainer.train()
         
-        # Check training result
         if result["status"] == "success":
             logger.info("Training completed successfully!")
             logger.info(f"Model saved to: {result['model_path']}")
