@@ -27,7 +27,7 @@ pytest>=8.0.0
 httpx>=0.26.0
 
 # Monitoring and Logging
-wandb>=0.16.2
+#wandb>=0.16.2
 loguru>=0.7.2
 
 # Type Checking

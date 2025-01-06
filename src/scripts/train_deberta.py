@@ -2,10 +2,11 @@ import argparse
 import logging
 from pathlib import Path
 from typing import Optional
-
+import os
 from src.models.deberta_trainer import DebertaTrainer
 from src.config.logging_config import setup_logging
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 setup_logging()
 logger = logging.getLogger(__name__)
