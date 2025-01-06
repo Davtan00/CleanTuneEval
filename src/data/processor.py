@@ -16,7 +16,7 @@ class DataProcessor:
         self.max_words = 150
         logger.info(f"Initialized DataProcessor with word limits: {self.min_words}-{self.max_words}")
         
-    def process_batch(self, batch: List[Dict], domain: str) -> List[Dict]:
+    def process_batch(self, batch: List[Dict], domain: str) -> Dict:
         """Process a batch of reviews."""
         try:
             logger.info(f"Processing batch for domain: {domain}")
@@ -30,7 +30,8 @@ class DataProcessor:
             result = self._process_batch_internal(data)
             
             if result['status'] == 'success':
-                return result['data']['generated_data']
+                # Return the full result structure instead of just generated_data
+                return result['data']
             else:
                 raise Exception(result['message'])
             
@@ -75,6 +76,11 @@ class DataProcessor:
             df['is_duplicate'] = is_duplicate
             df = df[~df['is_duplicate']]
             
+            # Before filtering, mark reviews that will be removed
+            df['is_removed'] = False
+            df.loc[df['is_duplicate'], 'is_removed'] = True
+            df.loc[~length_mask, 'is_removed'] = True
+            
             if len(df) == 0:
                 logger.error("All reviews were filtered out")
                 return {
@@ -98,7 +104,7 @@ class DataProcessor:
             
             # Prepare final output structure
             processed_data = {
-                'generated_data': df[['id', 'clean_text', 'sentiment']].to_dict('records'),
+                'generated_data': df[['id', 'clean_text', 'sentiment', 'is_removed']].to_dict('records'),
                 'domain': data['domain'],
                 'summary': {
                     'total_processed': int(initial_size),

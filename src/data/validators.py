@@ -165,14 +165,10 @@ class ValidationMetrics:
     exact_duplicates: int = 0
     near_duplicates: int = 0
     total_removed: int = 0
-    # Redo implementation with new package restriction
-    perplexity: float = 0.0
-    similarity_score: float = 0.0
-    vocabulary_richness: float = 0.0
-    is_outlier: bool = False
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert metrics to dictionary format."""
+        self.finalize()  # Ensure metrics are finalized before conversion, encountered way too many weird exceptions
         return {
             'total_processed': self.total_processed,
             'length_filtered': self.length_filtered,
@@ -180,30 +176,11 @@ class ValidationMetrics:
             'exact_duplicates': self.exact_duplicates,
             'near_duplicates': self.near_duplicates,
             'total_removed': self.total_removed
-        }    
-    def update_duplicate_counts(self, is_duplicate: bool, duplicate_type: str = None) -> None:
-        """Update duplicate-related counters."""
-        if is_duplicate:
-            self.duplicates_removed += 1
-            if duplicate_type == 'exact':
-                self.exact_duplicates += 1
-            elif duplicate_type == 'similar':
-                self.near_duplicates += 1
-                
+        }
+        
     def finalize(self) -> None:
         """Calculate final metrics."""
-        self.total_removed = self.length_filtered + self.duplicates_removed
-
-    def update_from_batch(self, batch_result: List[Dict]) -> None:
-        """Update metrics from a batch of processed reviews."""
-        for review in batch_result:
-            if review.get('is_removed', False):
-                if review.get('removal_reason') == 'length':
-                    self.length_filtered += 1
-                elif review.get('removal_reason') == 'duplicate':
-                    self.duplicates_removed += 1
-                    if review.get('duplicate_type') == 'exact':
-                        self.exact_duplicates += 1
-                    elif review.get('duplicate_type') == 'similar':
-                        self.near_duplicates += 1
-        self.finalize()
+        self.total_removed = (
+            self.length_filtered
+            + self.duplicates_removed
+        )

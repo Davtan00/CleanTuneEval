@@ -32,11 +32,9 @@ class DataPipeline:
             start_time = time.time()
             logger.info(f"Processing synthetic data for domain: {domain}")
             
-            # Initialize metrics tracking
             metrics = ValidationMetrics()
             processed_data = []
             
-            # Track initial count
             initial_count = len(data['generated_data'])
             metrics.total_processed = initial_count
             
@@ -45,46 +43,47 @@ class DataPipeline:
                 batch = data['generated_data'][i:i + batch_size]
                 batch_result = self.processor.process_batch(batch, domain)
                 
-                # Filter and store valid reviews
-                filtered_batch = [
-                    review for review in batch_result 
-                    if not review.get('is_removed', False)
-                ]
-                processed_data.extend(filtered_batch)
+                # Extract batch metrics and update pipeline metrics
+                if isinstance(batch_result, dict) and 'summary' in batch_result:
+                    filtering_summary = batch_result['summary']['filtering_summary']
+                    metrics.length_filtered += filtering_summary['length_filtered']
+                    metrics.duplicates_removed += filtering_summary['duplicates_removed']
+                    metrics.exact_duplicates += filtering_summary['exact_duplicates']
+                    metrics.near_duplicates += filtering_summary['near_duplicates']
+                    
+                    # Get processed reviews from correct location in batch_result
+                    if 'generated_data' in batch_result:
+                        processed_data.extend(batch_result['generated_data'])
                 
-                # Update metrics
-                removed_count = len(batch) - len(filtered_batch)
-                metrics.total_removed += removed_count
-                
-                logger.debug(f"Batch {i//batch_size + 1}: Processed {len(batch)} reviews, "
-                            f"kept {len(filtered_batch)}, removed {removed_count}")
+                logger.debug(f"Batch {i//batch_size + 1}: "
+                            f"Processed {len(batch)}, "
+                            f"kept {len(batch_result.get('generated_data', []))}")
+            
+            # Re-enumerate IDs unconditionally since we know processor filtered the data
+            final_count = len(processed_data)
+            for idx, review in enumerate(processed_data, start=1):
+                review['id'] = idx
             
             # Calculate final metrics
-            final_count = len(processed_data)
-            metrics.total_removed = initial_count - final_count
+            metrics.total_removed = (
+                metrics.length_filtered
+                + metrics.duplicates_removed
+            )
             
-            # Create final dataset
             dataset_id = generate_dataset_id(
                 domain=domain,
-                data_size=final_count,  # Use actual final count
+                data_size=final_count,
                 custom_tag=custom_tag
             )
             
-            # Update data with filtered reviews and metrics
+            # Update data structure with processed reviews and metrics
             data['generated_data'] = processed_data
             data['summary'] = {
-                'filtering_summary': {
-                    'total_processed': initial_count,
-                    'length_filtered': metrics.length_filtered,
-                    'duplicates_removed': metrics.duplicates_removed,
-                    'exact_duplicates': metrics.exact_duplicates,
-                    'near_duplicates': metrics.near_duplicates,
-                    'total_removed': metrics.total_removed
-                },
+                'filtering_summary': metrics.to_dict(),
                 'sentiment_distribution': self._calculate_sentiment_distribution(processed_data)
             }
             
-            # Save processed data and get storage info
+            # Save processed data
             storage_info = self.storage.save_processed_data(
                 data=data,
                 domain=domain,
