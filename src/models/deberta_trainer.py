@@ -131,35 +131,66 @@ class DebertaTrainer:
         Tokenize text and map label strings to integer IDs.
         """
         def process(example):
+            # Add debug logging for input
+            logger.debug(f"Processing example: {example}")
+            
             tokenized = tokenizer(
                 example["text"],
                 truncation=True,
                 padding="max_length",
-                max_length=128
+                max_length=128,
+                return_tensors="pt"  # Ensure PyTorch tensors
             )
+            
+            # Debug label processing
             label_str = example["labels"]
-            logger.debug(f"Processing label: {label_str}")
-
+            logger.debug(f"Processing label: {label_str}, type: {type(label_str)}")
+            
             if label_str not in self.label2id:
+                logger.error(f"Invalid label encountered: '{label_str}'")
+                logger.error(f"Valid labels are: {list(self.label2id.keys())}")
                 raise ValueError(
                     f"Unexpected label '{label_str}'. "
                     f"Must be one of: {list(self.label2id.keys())}."
                 )
-            tokenized["labels"] = self.label2id[label_str]
+            
+            label_id = self.label2id[label_str]
+            logger.debug(f"Converted label '{label_str}' to ID: {label_id}")
+            
+            # Create tensors and move to device
+            tokenized = {k: v.squeeze(0).to(self.device) for k, v in tokenized.items()}
+            tokenized["labels"] = torch.tensor(label_id, device=self.device)
+            
+            # Debug final tensor creation
+            logger.debug(f"Final tokenized example: {tokenized}")
             return tokenized
 
         for split_name in dataset_dict.keys():
             logger.info(f"Processing {split_name} split...")
-            dataset_dict[split_name] = dataset_dict[split_name].map(process, batched=False)
-            dataset_dict[split_name].set_format(
-                type="torch",
-                columns=["input_ids", "attention_mask", "labels"]
-            )
-            print(dataset_dict["validation"].column_names)
-
-            unique_labels = dataset_dict[split_name]["labels"].unique()
-            logger.info(f"Unique labels in {split_name}: {unique_labels}")
+            logger.info(f"Original columns: {dataset_dict[split_name].column_names}")
             
+            # Process the split
+            processed = dataset_dict[split_name].map(
+                process,
+                batched=False,
+                remove_columns=dataset_dict[split_name].column_names
+            )
+            
+            # Debug tensor conversion
+            logger.info(f"Setting format for {split_name}")
+            processed.set_format(type="torch")
+            
+            # Verify tensor properties
+            sample = processed[0]
+            for key, value in sample.items():
+                if torch.is_tensor(value):
+                    logger.info(f"{split_name} {key} tensor: "
+                              f"shape={value.shape}, "
+                              f"device={value.device}, "
+                              f"requires_grad={value.requires_grad if hasattr(value, 'requires_grad') else False}")
+            
+            dataset_dict[split_name] = processed
+
         return dataset_dict
 
     def _create_model(self):
@@ -170,14 +201,12 @@ class DebertaTrainer:
             self.model_name,
             num_labels=3
         )
-        # Move to device before LoRA adaptation
-        base_model = base_model.to(self.device)
         
-        # Ensure gradients are enabled
-        for param in base_model.parameters():
-            param.requires_grad_(True)
-        
+        # Apply LoRA first
         model = get_peft_model(base_model, self.lora_config)
+        
+        # Move complete model (with LoRA) to device
+        model = model.to(self.device)
         
         # Double-check gradients after LoRA
         trainable_params = 0
@@ -192,6 +221,10 @@ class DebertaTrainer:
             f"all params: {all_param} || "
             f"trainable%: {100 * trainable_params / all_param}"
         )
+        
+        # Ensure training mode
+        model.train()
+        
         return model
 
     def _setup_training_args(self) -> TrainingArguments:
