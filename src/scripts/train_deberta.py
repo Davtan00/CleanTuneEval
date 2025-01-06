@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 import os
+from datasets import load_from_disk
 from src.models.deberta_trainer import DebertaTrainer
 from src.config.logging_config import setup_logging
 
@@ -53,21 +54,39 @@ def parse_args():
     return parser.parse_args()
 
 def validate_dataset_path(dataset_path: str) -> Optional[Path]:
-    """Validate that the dataset path exists and has the expected structure."""
+    """
+    Validate that the dataset path exists and has the expected structure.
+    Also enforces the presence of the columns:
+        ['text', 'labels', 'id', 'original_id']
+    in each split (train, validation, test).
+    """
     path = Path(dataset_path)
-    
     if not path.exists():
         logger.error(f"Dataset path does not exist: {path}")
         return None
         
-    # Check for required files/directories
+    # Check for required HF dataset structure
     required_items = ["dataset_dict.json", "train", "validation", "test"]
     missing_items = [item for item in required_items if not (path / item).exists()]
-    
     if missing_items:
         logger.error(f"Dataset at {path} is missing required items: {missing_items}")
         return None
-        
+    
+    # Load dataset and check columns
+    dataset = load_from_disk(str(path))
+    required_columns = ["text", "labels", "id", "original_id"]
+    for split_name in ["train", "validation", "test"]:
+        if split_name not in dataset:
+            logger.error(f"Dataset is missing the '{split_name}' split.")
+            return None
+        split_cols = dataset[split_name].column_names
+        for col in required_columns:
+            if col not in split_cols:
+                logger.error(
+                    f"Dataset split '{split_name}' does not contain the required column '{col}'. "
+                    f"Found columns: {split_cols}"
+                )
+                return None
     return path
 
 def verify_environment():
@@ -102,7 +121,7 @@ def main():
         logger.error("Environment verification failed. Please check your dependencies.")
         return 1
     
-    # Validate dataset path
+    # Validate dataset path & columns
     dataset_path = validate_dataset_path(args.dataset_path)
     if dataset_path is None:
         return 1
@@ -154,4 +173,4 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    exit(main()) 
+    exit(main())

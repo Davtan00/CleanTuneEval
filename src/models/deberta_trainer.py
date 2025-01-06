@@ -17,11 +17,18 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DebertaTrainer:
+    """
+    A trainer class strictly expecting the following columns in the dataset:
+        ["text", "labels", "id", "original_id"]
+    The "labels" column must contain strings from {"negative", "neutral", "positive"}.
+    """
+
     def __init__(
         self,
         dataset_path: str,
@@ -32,7 +39,6 @@ class DebertaTrainer:
         self.model_name = model_name
         
         # Extract dataset ID from the directory name itself, not its parent
-        # APPLY THIS TO ALL FILES THAT USE THIS LOGIC
         self.dataset_id = self.dataset_path.name
         logger.info(f"Extracted dataset ID: {self.dataset_id}")
         
@@ -41,7 +47,7 @@ class DebertaTrainer:
         self.output_dir = Path("src/models/storage/deberta-v3-base/lora/three_way") / timestamp
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load any stored dataset metrics (optional)
+        # Load any stored dataset metrics 
         self.dataset_metrics = self._load_dataset_metrics()
         
         # Default or custom LoRA config
@@ -53,8 +59,11 @@ class DebertaTrainer:
             task_type="SEQ_CLS"
         )
 
+        # Hardcoded for our synthetic datasets
+        self.label2id = {"negative": 0, "neutral": 1, "positive": 2}
+
     def _load_dataset_metrics(self) -> Dict:
-        """Load the metrics from Part A processing for reference."""
+        """Load the metrics from Part A processing for reference (if any exist)."""
         metrics_path = Path("src/data/storage/metrics") / f"{self.dataset_id}_metrics.json"
         try:
             with open(metrics_path) as f:
@@ -65,7 +74,7 @@ class DebertaTrainer:
 
     def _setup_training_args(self) -> TrainingArguments:
         dataset = load_from_disk(self.dataset_path)
-        train_size = len(dataset['train'])
+        train_size = len(dataset["train"])
         logger.info(f"Training set size: {train_size} samples")
         
         # Adjust batch size based on environment
@@ -100,7 +109,8 @@ class DebertaTrainer:
                 use_fast=True,
                 trust_remote_code=True
             )
-            if not any(name in str(type(tokenizer)).lower() for name in ['deberta', 'sentencepiece']):
+            # Validate tokenizer type
+            if not any(name in str(type(tokenizer)).lower() for name in ["deberta", "sentencepiece"]):
                 raise ValueError("Loaded tokenizer is not DeBERTa/SentencePiece-based")
             return tokenizer
         except Exception as first_error:
@@ -119,16 +129,30 @@ class DebertaTrainer:
                 )
 
     def _preprocess_data(self, dataset_dict: DatasetDict, tokenizer) -> DatasetDict:
-        """Tokenize text and set torch format."""
+        """
+        Tokenize text and convert string labels {"negative","neutral","positive"} to integer IDs 0,1,2.
+        Expects dataset columns: ["text", "labels", "id", "original_id"].
+        """
+
         def tokenize_function(example):
-            return tokenizer(
+            tokenized = tokenizer(
                 example["text"], 
                 truncation=True, 
                 padding="max_length", 
                 max_length=128
             )
+            label_str = example["labels"]
+            if label_str not in self.label2id:
+                # Strict enforcement of the specified label set
+                raise ValueError(
+                    f"Found unexpected label '{label_str}'. "
+                    f"Expected one of {list(self.label2id.keys())}."
+                )
+            tokenized["labels"] = self.label2id[label_str]
+            return tokenized
+
         for split in dataset_dict.keys():
-            dataset_dict[split] = dataset_dict[split].map(tokenize_function, batched=True)
+            dataset_dict[split] = dataset_dict[split].map(tokenize_function, batched=False)
             dataset_dict[split].set_format(
                 type="torch",
                 columns=["input_ids", "attention_mask", "labels"]
@@ -136,7 +160,7 @@ class DebertaTrainer:
         return dataset_dict
 
     def _setup_model(self):
-        """Load base DeBERTa model and inject LoRA adapters."""
+        """Load base DeBERTa model and inject LoRA adapters. We assume specific model script so always numlabels 3."""
         base_model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
             num_labels=3
@@ -160,12 +184,12 @@ class DebertaTrainer:
         }
 
     def train(self) -> Dict:
-        """Execute the full training pipeline."""
+        """Execute the full training pipeline with strict format enforcement."""
         try:
             # 1. Load dataset
             dataset_dict = load_from_disk(self.dataset_path)
             logger.info(f"Loaded dataset splits: {dataset_dict.keys()}")
-            
+
             # 2. Initialize tokenizer
             tokenizer = self._initialize_tokenizer()
             
