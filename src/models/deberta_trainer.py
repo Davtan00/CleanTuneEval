@@ -152,6 +152,7 @@ class DebertaTrainer:
     def _setup_training_args(self) -> TrainingArguments:
         """
         Construct TrainingArguments from the user-provided training_config.
+        Filters out non-training arguments like model_name_or_path.
         """
         dataset = load_from_disk(self.dataset_path)
         train_size = len(dataset["train"])
@@ -166,9 +167,10 @@ class DebertaTrainer:
             "load_best_model_at_end": True,
         }
 
-        # Merge in user-provided config from JSON
-        for key, value in self.training_config.items():
-            args_dict[key] = value
+        # Filter out non-training config parameters and merge in user-provided config
+        training_params = {k: v for k, v in self.training_config.items() 
+                         if k not in ["model_name_or_path"]}  # exclude model path
+        args_dict.update(training_params)
 
         # Ensure mandatory fields
         required_keys = ["num_train_epochs", "learning_rate"]
@@ -234,7 +236,24 @@ class DebertaTrainer:
     def _save_results(self, train_result, test_metrics):
         """
         Save training and evaluation metadata to a JSON file.
+        Handles non-serializable objects by converting them to serializable types.
         """
+        def make_json_serializable(obj):
+            if isinstance(obj, (set, frozenset)):
+                return list(obj)
+            elif isinstance(obj, (np.integer, np.floating)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif hasattr(obj, '__dict__'):
+                return obj.__dict__
+            return obj
+
+        # Convert metrics to serializable format
+        train_metrics = train_result.metrics if hasattr(train_result, 'metrics') else {}
+        if callable(train_metrics):
+            train_metrics = train_metrics()
+
         meta = {
             "dataset_info": {
                 "id": self.dataset_id,
@@ -246,13 +265,13 @@ class DebertaTrainer:
                 "device": str(self._get_device())
             },
             "results": {
-                "train_metrics": train_result.metrics,
-                "test_metrics": test_metrics
+                "train_metrics": {k: make_json_serializable(v) for k, v in train_metrics.items()},
+                "test_metrics": {k: make_json_serializable(v) for k, v in test_metrics.items()}
             }
         }
         out_path = self.output_dir / "training_metadata.json"
         with open(out_path, 'w') as f:
-            json.dump(meta, f, indent=2)
+            json.dump(meta, f, indent=2, default=make_json_serializable)
 
     @staticmethod
     def _get_device() -> str:

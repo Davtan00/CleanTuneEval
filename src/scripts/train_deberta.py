@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train DeBERTa model with LoRA on sentiment analysis data. "
-                    "Requires explicit LoRA and training config files."
+                    "Config files can be specified or will default to standard paths."
     )
     parser.add_argument(
         "dataset_path",
@@ -27,16 +27,27 @@ def parse_args():
     parser.add_argument(
         "--lora-config-file",
         type=str,
-        required=True,
-        help="Path to the LoRA config JSON (e.g., src/models/config/lora_config.json)"
+        default="src/models/config/lora_config.json",
+        help="Path to the LoRA config JSON (defaults to src/models/config/lora_config.json)"
     )
     parser.add_argument(
         "--training-config-file",
         type=str,
-        required=True,
-        help="Path to the training config JSON (e.g., src/models/config/training_config.json)"
+        default="src/models/config/training_config.json",
+        help="Path to the training config JSON (defaults to src/models/config/training_config.json)"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Add warning messages for default config paths
+    if args.lora_config_file == "src/models/config/lora_config.json":
+        logger.warning("⚠️  Using default LoRA config path: src/models/config/lora_config.json")
+        logger.warning("   To use a custom config, specify --lora-config-file")
+    
+    if args.training_config_file == "src/models/config/training_config.json":
+        logger.warning("⚠️  Using default training config path: src/models/config/training_config.json")
+        logger.warning("   To use a custom config, specify --training-config-file")
+
+    return args
 
 def validate_dataset_path(dataset_path: str) -> Optional[Path]:
     """
