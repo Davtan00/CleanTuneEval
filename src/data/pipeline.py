@@ -29,21 +29,21 @@ class DataPipeline:
         """Process synthetic data through the pipeline with proper metrics tracking"""
         try:
             domain = data['domain']
-            start_time = time.time()  # Move time tracking to start of processing
+            start_time = time.time()
             logger.info(f"Processing synthetic data for domain: {domain}")
             
             # Initialize metrics tracking
             metrics = ValidationMetrics()
             processed_data = []
             
+            # Track initial count
+            initial_count = len(data['generated_data'])
+            metrics.total_processed = initial_count
+            
             # Process reviews in batches
-            for i in range(0, len(data['generated_data']), batch_size):
+            for i in range(0, initial_count, batch_size):
                 batch = data['generated_data'][i:i + batch_size]
                 batch_result = self.processor.process_batch(batch, domain)
-                
-                # Update metrics before filtering
-                metrics.total_processed += len(batch)
-                metrics.update_from_batch(batch_result)
                 
                 # Filter and store valid reviews
                 filtered_batch = [
@@ -52,20 +52,35 @@ class DataPipeline:
                 ]
                 processed_data.extend(filtered_batch)
                 
+                # Update metrics
+                removed_count = len(batch) - len(filtered_batch)
+                metrics.total_removed += removed_count
+                
                 logger.debug(f"Batch {i//batch_size + 1}: Processed {len(batch)} reviews, "
-                            f"kept {len(filtered_batch)}")
+                            f"kept {len(filtered_batch)}, removed {removed_count}")
+            
+            # Calculate final metrics
+            final_count = len(processed_data)
+            metrics.total_removed = initial_count - final_count
             
             # Create final dataset
             dataset_id = generate_dataset_id(
                 domain=domain,
-                data_size=len(processed_data),
+                data_size=final_count,  # Use actual final count
                 custom_tag=custom_tag
             )
             
             # Update data with filtered reviews and metrics
             data['generated_data'] = processed_data
             data['summary'] = {
-                'filtering_summary': metrics.to_dict(),
+                'filtering_summary': {
+                    'total_processed': initial_count,
+                    'length_filtered': metrics.length_filtered,
+                    'duplicates_removed': metrics.duplicates_removed,
+                    'exact_duplicates': metrics.exact_duplicates,
+                    'near_duplicates': metrics.near_duplicates,
+                    'total_removed': metrics.total_removed
+                },
                 'sentiment_distribution': self._calculate_sentiment_distribution(processed_data)
             }
             
@@ -92,10 +107,10 @@ class DataPipeline:
                     'path': str(self.dataset_manager.base_path / dataset_id),
                     'splits': list(dataset.keys())
                 },
-                'storage': storage_info,  # Now uses consistent structure
+                'storage': storage_info,
                 'performance': {
                     'processing_time': processing_time,
-                    'avg_time_per_review': processing_time / len(data['generated_data'])
+                    'avg_time_per_review': processing_time / initial_count
                 }
             }
             

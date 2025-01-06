@@ -26,10 +26,10 @@ def main():
     parser = argparse.ArgumentParser(description='Process review data through the cleaning pipeline.')
     parser.add_argument('input_file', help='Path to input JSON file containing reviews')
     parser.add_argument('--tag', help='Optional custom tag for the dataset', default=None)
-    parser.add_argument('--batch-size', type=int, default=1000, 
-                       help='Batch size for processing (default: 1000)')
-    parser.add_argument('--use-mps', action='store_true', 
-                       help='Use MPS acceleration on Apple Silicon')
+    parser.add_argument('--batch-size', type=int, default=1500, 
+                       help='Batch size for processing (default: 1500)')
+    parser.add_argument('--force-cpu', action='store_true',
+                       help='Force CPU usage even if accelerators are available')
     parser.add_argument('--preserve-distribution', action='store_true',
                        help='Preserve original data distribution (for evaluation datasets)')
     
@@ -40,13 +40,10 @@ def main():
         sys.exit(1)
     
     try:
-        # Configure hardware settings
+        # Configure hardware settings with automatic detection
         hw_config = HardwareConfig(
-            device='mps' if args.use_mps else 'cpu',
-            n_cores=14,  # M4 Pro core count
-            memory_limit=48,  # 48GB RAM
-            use_mps=args.use_mps,
-            preserve_distribution=args.preserve_distribution
+            preserve_distribution=args.preserve_distribution,
+            force_cpu=args.force_cpu
         )
         
         # Load input data with validation
@@ -99,10 +96,24 @@ def main():
         logger.info("\nOutput Locations:")
         logger.info(f"Dataset ID: {result['dataset_info']['id']}")
         logger.info(f"Input data: {args.input_file}")
-        logger.info(f"Processed data: {result['storage']['processed_path']}")
+        logger.info(f"Processed data: {result['storage']['data_path']}")
         logger.info(f"Metrics: {result['storage']['metrics_path']}")
         logger.info(f"Dataset path: {result['dataset_info']['path']}")
         logger.info("Dataset splits:", result['dataset_info']['splits'])
+        
+        # Verify filtering results , causing too much trouble, remove later
+        if result['status'] == 'success':
+            processed_data = result['data']['generated_data']
+            accepted_count = len([r for r in processed_data if not r.get('is_removed', False)])
+            logger.info(f"\nFiltering Verification:")
+            logger.info(f"Total reviews processed: {len(processed_data)}")
+            logger.info(f"Reviews accepted: {accepted_count}")
+            logger.info(f"Reviews removed: {len(processed_data) - accepted_count}")
+            
+            # Verify ID range
+            max_id = max(r['id'] for r in processed_data)
+            if max_id >= accepted_count:
+                logger.warning(f"Warning: Maximum ID ({max_id}) is greater than number of accepted reviews ({accepted_count})")
         
     except Exception as e:
         logger.error(f"Error processing reviews: {str(e)}")

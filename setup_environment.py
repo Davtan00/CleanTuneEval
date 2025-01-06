@@ -31,39 +31,64 @@ def setup_requirements():
     print("\n=== Setting up requirements ===")
     
     # Ensure pip and pip-tools are up to date
-    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "pip-tools"])
+    subprocess.run([
+        sys.executable, "-m", "pip", "install", "--upgrade", "pip", "pip-tools"
+    ])
     
-    # Generate platform-specific requirements
-    requirements = {
-        'base': 'requirements.txt',
-        'cpu': 'requirements/requirements-cpu.txt',
-        'cuda': 'requirements/requirements-cuda.txt',
-        'mps': 'requirements/requirements-mps.txt'
+    # Generate base requirements.txt
+    print("\nGenerating base requirements.txt...")
+    try:
+        subprocess.run([
+            "pip-compile",
+            "requirements.in",
+            "--upgrade",
+            "--output-file", "requirements.txt"
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error generating requirements.txt: {e}")
+        return False
+
+    # Create platform-specific requirements
+    requirements_dir = Path('requirements')
+    requirements_dir.mkdir(exist_ok=True)
+    
+    # Create platform-specific requirements manually
+    platform_specs = {
+        'cpu': """# CPU-specific requirements
+-r ../requirements.txt
+torch==2.5.1
+torchvision
+torchaudio
+--index-url https://download.pytorch.org/whl/cpu
+""",
+        'cuda': """# CUDA-specific requirements
+-r ../requirements.txt
+torch==2.5.1
+torchvision
+torchaudio
+--index-url https://download.pytorch.org/whl/cu118
+""",
+        'mps': """# MPS-specific requirements (Apple Silicon)
+-r ../requirements.txt
+torch==2.5.1
+torchvision
+torchaudio
+--index-url https://download.pytorch.org/whl/cpu
+"""
     }
     
-    # Create requirements directory if it doesn't exist
-    Path('requirements').mkdir(exist_ok=True)
-    
-    for platform_type, req_file in requirements.items():
+    for platform_type, content in platform_specs.items():
+        req_file = requirements_dir / f"requirements-{platform_type}.txt"
         print(f"\nGenerating {req_file}...")
         try:
-            if platform_type == 'base':
-                subprocess.run([
-                    "pip-compile",
-                    "requirements.in",
-                    "--upgrade",
-                    "--output-file", req_file
-                ], check=True)
-            else:
-                subprocess.run([
-                    "pip-compile",
-                    "requirements.in",
-                    "--upgrade",
-                    "--output-file", req_file,
-                    f"--extra={platform_type}"
-                ], check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Error generating {req_file}: {e}")
+            with open(req_file, 'w') as f:
+                f.write(content)
+            print(f"Created {req_file}")
+        except Exception as e:
+            print(f"Error creating {req_file}: {e}")
+            return False
+    
+    return True
 
 def install_dependencies(is_apple_silicon):
     """Install dependencies based on platform."""
@@ -75,16 +100,20 @@ def install_dependencies(is_apple_silicon):
         "torch", "torchvision", "torchaudio"
     ])
     
+    # Install base requirements first
+    subprocess.run([
+        sys.executable, "-m", "pip", "install", "-r", "requirements.txt"
+    ])
+    
+    # Install platform-specific PyTorch
     if is_apple_silicon:
         print("\nInstalling PyTorch for Apple Silicon...")
-        # Install PyTorch with MPS support
         subprocess.run([
             sys.executable, "-m", "pip", "install",
             "torch==2.5.1", "torchvision", "torchaudio",
-            "--index-url", "https://download.pytorch.org/whl/cpu"
+            "--index-url", "https://download.pytorch.org/whl/cpu"  # CPU build works with MPS
         ])
     else:
-        # For non-Apple Silicon, use appropriate requirements
         if torch.cuda.is_available():
             subprocess.run([
                 sys.executable, "-m", "pip", "install",

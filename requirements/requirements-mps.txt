@@ -1,2 +1,6 @@
--r requirements-base.txt
-# MPS-specific dependencies - using standard torch optimizers 
+# MPS-specific requirements (Apple Silicon)
+-r ../requirements.txt
+torch==2.5.1
+torchvision
+torchaudio
+--index-url https://download.pytorch.org/whl/cpu
