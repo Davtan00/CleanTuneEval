@@ -1,10 +1,10 @@
 {
-    "r": 16,
-    "lora_alpha": 32,
-    "lora_dropout": 0.05,
-    "bias": "none",
-    "target_modules": [
-      "query_proj",
-      "value_proj"
-    ]
-  }
+  "r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "bias": "none",
+  "target_modules": [
+    "query_proj",
+    "value_proj"
+  ]
+}

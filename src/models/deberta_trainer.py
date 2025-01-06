@@ -1,5 +1,3 @@
-# File: /Users/davidtanner/Documents/GitHub/CleanTuneEval/src/models/deberta_trainer.py
-
 import os
 import json
 from datetime import datetime
@@ -20,10 +18,12 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+
 from .config.training_utils import TrainingConfigurator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 class DebertaTrainer:
     """
@@ -81,6 +81,7 @@ class DebertaTrainer:
         """
         Load any previously computed metrics for the dataset, if available.
         """
+        from pathlib import Path
         metrics_path = Path("src/data/storage/metrics") / f"{self.dataset_id}_metrics.json"
         try:
             with open(metrics_path) as f:
@@ -127,146 +128,139 @@ class DebertaTrainer:
                 raise RuntimeError(f"DeBERTa tokenizer initialization failed: {e}")
 
     def _preprocess_dataset(self, dataset_dict: DatasetDict, tokenizer) -> DatasetDict:
-        """
-        Tokenize text and map label strings to integer IDs.
-        """
+        """Simplified preprocessing with explicit tensor handling"""
+
         def process(example):
-            # Add debug logging for input
-            logger.debug(f"Processing example: {example}")
-            
+            # Basic tokenization without tensor conversion
             tokenized = tokenizer(
                 example["text"],
                 truncation=True,
                 padding="max_length",
                 max_length=128,
-                return_tensors="pt"  # Ensure PyTorch tensors
+                return_tensors=None  # Let set_format handle torch conversion
             )
-            
-            # Debug label processing
-            label_str = example["labels"]
-            logger.debug(f"Processing label: {label_str}, type: {type(label_str)}")
-            
-            if label_str not in self.label2id:
-                logger.error(f"Invalid label encountered: '{label_str}'")
-                logger.error(f"Valid labels are: {list(self.label2id.keys())}")
-                raise ValueError(
-                    f"Unexpected label '{label_str}'. "
-                    f"Must be one of: {list(self.label2id.keys())}."
-                )
-            
-            label_id = self.label2id[label_str]
-            logger.debug(f"Converted label '{label_str}' to ID: {label_id}")
-            
-            # Create tensors and move to device
-            tokenized = {k: v.squeeze(0).to(self.device) for k, v in tokenized.items()}
-            tokenized["labels"] = torch.tensor(label_id, device=self.device)
-            
-            # Debug final tensor creation
-            logger.debug(f"Final tokenized example: {tokenized}")
+            # Convert label to integer
+            label_id = self.label2id[example["labels"]]
+            tokenized["labels"] = label_id
             return tokenized
 
-        for split_name in dataset_dict.keys():
-            logger.info(f"Processing {split_name} split...")
-            logger.info(f"Original columns: {dataset_dict[split_name].column_names}")
-            
-            # Process the split
-            processed = dataset_dict[split_name].map(
-                process,
-                batched=False,
-                remove_columns=dataset_dict[split_name].column_names
-            )
-            
-            # Debug tensor conversion
-            logger.info(f"Setting format for {split_name}")
-            processed.set_format(type="torch")
-            
-            # Verify tensor properties
-            sample = processed[0]
-            for key, value in sample.items():
-                if torch.is_tensor(value):
-                    logger.info(f"{split_name} {key} tensor: "
-                              f"shape={value.shape}, "
-                              f"device={value.device}, "
-                              f"requires_grad={value.requires_grad if hasattr(value, 'requires_grad') else False}")
-            
-            dataset_dict[split_name] = processed
+        # Process all splits
+        processed = dataset_dict.map(
+            process,
+            remove_columns=dataset_dict["train"].column_names,
+            desc="Tokenizing datasets"
+        )
 
-        return dataset_dict
+        # Set format for PyTorch
+        processed.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+        return processed
 
     def _create_model(self):
         """
-        Load the base DeBERTa model and apply LoRA adapters with explicit gradient setup.
+        Simplified model creation with explicit gradient setup
         """
-        base_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name,
-            num_labels=3
-        )
-        
-        # Apply LoRA first
-        model = get_peft_model(base_model, self.lora_config)
-        
-        # Move complete model (with LoRA) to device
-        model = model.to(self.device)
-        
-        # Double-check gradients after LoRA
-        trainable_params = 0
-        all_param = 0
-        for param in model.parameters():
-            num_params = param.numel()
-            all_param += num_params
-            if param.requires_grad:
-                trainable_params += num_params
-        logger.info(
-            f"trainable params: {trainable_params} || "
-            f"all params: {all_param} || "
-            f"trainable%: {100 * trainable_params / all_param}"
-        )
-        
-        # Ensure training mode
-        model.train()
-        
-        return model
+        try:
+            # 1. Initialize base model
+            model = AutoModelForSequenceClassification.from_pretrained(
+                self.model_name,
+                num_labels=3,  # Hardcoded for 3-way sentiment
+                trust_remote_code=True
+            )
+
+            # 2. Enable gradients explicitly (in case any layers were off)
+            for param in model.parameters():
+                param.requires_grad = True
+
+            # 3. Create and apply LoRA config
+            peft_config = LoraConfig(
+                task_type="SEQ_CLS",
+                inference_mode=False,
+                r=self.lora_config.r,
+                lora_alpha=self.lora_config.lora_alpha,
+                lora_dropout=self.lora_config.lora_dropout,
+                target_modules=self.lora_config.target_modules
+            )
+            model = get_peft_model(model, peft_config)
+
+            # 4. Move to device after LoRA application
+            model = model.to(self.device)
+
+            # 5. Double-check trainable parameters
+            trainable_params = 0
+            all_param = 0
+            for param in model.parameters():
+                num_params = param.numel()
+                all_param += num_params
+                if param.requires_grad:
+                    trainable_params += num_params
+
+            logger.info(
+                f"trainable params: {trainable_params} || "
+                f"all params: {all_param} || "
+                f"trainable%: {100 * trainable_params / all_param}"
+            )
+
+            # 6. Ensure training mode
+            model.train()
+            return model
+
+        except Exception as e:
+            logger.error(f"Model creation failed: {e}")
+            raise
 
     def _setup_training_args(self) -> TrainingArguments:
         """
-        Build TrainingArguments with platform-specific optimizations,
-        using the hardware_config if provided.
+        Merge user-supplied training_config.json with the device-specific
+        defaults from TrainingConfigurator (if you wish to use them).
         """
-        dataset = load_from_disk(self.dataset_path)
-        train_size = len(dataset["train"])
-        logger.info(f"Training set size: {train_size} samples")
 
-        # Use hardware_config directly - it's required in __init__
-        device_type = self.hardware_config.optimizer_type
+        # Start with user JSON config
+        user_conf = self.training_config.copy()
 
-        optimizer_config = TrainingConfigurator.get_optimizer_config(device_type)
-        
-        args_dict = {
+        # Pull in device-specific defaults (cuda/mps/cpu)
+        device_config = TrainingConfigurator.get_optimizer_config(self.hardware_config.optimizer_type)
+
+        # Merge device_config into user_conf, but user_conf keys take priority
+        for k, v in device_config.items():
+            if k not in user_conf:
+                user_conf[k] = v
+
+        # Build a dictionary of TrainingArguments from the merged config
+        # (some keys in user_conf won't be recognized by TrainingArguments, so filter them)
+        known_args = {
+            # Must-have fields
             "output_dir": str(self.output_dir),
-            "evaluation_strategy": "epoch",
-            "save_strategy": "epoch",
-            "report_to": "none",
-            "load_best_model_at_end": True,
-            **optimizer_config
+            "evaluation_strategy": user_conf["evaluation_strategy"],
+            "save_strategy": user_conf["save_strategy"],
+            "load_best_model_at_end": user_conf["load_best_model_at_end"],
+            "metric_for_best_model": user_conf["metric_for_best_model"],
+            "greater_is_better": user_conf["greater_is_better"],
+            "logging_steps": user_conf["logging_steps"],
+            # Typical hyperparams
+            "num_train_epochs": user_conf["num_train_epochs"],
+            "per_device_train_batch_size": user_conf["per_device_train_batch_size"],
+            "per_device_eval_batch_size": user_conf["per_device_eval_batch_size"],
+            "learning_rate": user_conf["learning_rate"],
+            "weight_decay": user_conf["weight_decay"],
+            # Additional optional fields from device_config or user_conf
+            "warmup_ratio": user_conf.get("warmup_ratio", 0.0),
+            "optim": user_conf.get("optim", "adamw_torch"),
+            "fp16": user_conf.get("fp16", False),
+            "gradient_checkpointing": user_conf.get("gradient_checkpointing", False),
+            "gradient_accumulation_steps": user_conf.get("gradient_accumulation_steps", 1),
+            "dataloader_pin_memory": user_conf.get("dataloader_pin_memory", True),
         }
 
-        user_params = {
-            k: v for k, v in self.training_config.items() 
-            if k not in ["model_name_or_path"]
-        }
-        args_dict.update(user_params)
-
-        return TrainingArguments(**args_dict)
+        return TrainingArguments(**known_args)
 
     def _compute_metrics(self, p: EvalPrediction) -> Dict[str, float]:
         """
         Compute combined_metric = 0.7 * macro-F1 + 0.3 * accuracy
         along with basic metrics (accuracy, precision, recall, f1).
-        The HF Trainer will see them as "eval_accuracy", "eval_f1", etc.
-        but we reference "eval_combined_metric" in training_config.json.
         """
         logger.info("Inside _compute_metrics, about to compute accuracy, f1, etc.")
         try:
+            # Unpack logits
             if isinstance(p.predictions, tuple):
                 logits = p.predictions[0]
             else:
@@ -275,6 +269,7 @@ class DebertaTrainer:
             preds = np.argmax(logits, axis=1)
             labels = p.label_ids
 
+            # Basic metrics
             accuracy_val = accuracy_score(labels, preds)
             precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
                 labels, preds, average="macro", zero_division=0
@@ -308,15 +303,19 @@ class DebertaTrainer:
         5. Train and evaluate on test set
         """
         try:
+            # 1. Load dataset
             dataset_dict = load_from_disk(self.dataset_path)
             logger.info(f"Loaded dataset splits: {list(dataset_dict.keys())}")
 
+            # 2. Initialize tokenizer, preprocess
             tokenizer = self._initialize_tokenizer()
             dataset_dict = self._preprocess_dataset(dataset_dict, tokenizer)
 
+            # 3. Create the model (base + LoRA)
             model = self._create_model()
-            training_args = self._setup_training_args()
 
+            # 4. Setup training args and create Trainer
+            training_args = self._setup_training_args()
             trainer = Trainer(
                 model=model,
                 args=training_args,
@@ -326,10 +325,10 @@ class DebertaTrainer:
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
             )
 
-            # Train
+            # 5. Train
             train_result = trainer.train()
 
-            # Evaluate on test
+            # Evaluate on test set
             test_metrics = trainer.evaluate(dataset_dict["test"])
             self._save_results(train_result, test_metrics)
 
