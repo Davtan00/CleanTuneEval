@@ -1,12 +1,13 @@
 import argparse
 import logging
+import os
+import json
 from pathlib import Path
 from typing import Optional
-import os
 from datasets import load_from_disk
+
 from src.models.deberta_trainer import DebertaTrainer
 from src.config.logging_config import setup_logging
-import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -15,65 +16,44 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train DeBERTa model using LoRA on sentiment analysis data"
+        description="Train DeBERTa model with LoRA on sentiment analysis data. "
+                    "Requires explicit LoRA and training config files."
     )
-    
     parser.add_argument(
         "dataset_path",
         type=str,
-        help="Path to the HuggingFace dataset directory"
+        help="Path to the HuggingFace dataset directory (e.g., src/data/datasets/technology_7k_*)"
     )
-    parser.add_argument("--model-name", type=str, default="microsoft/deberta-v3-base")
-    
-    # Existing LoRA overrides
-    parser.add_argument("--lora-rank", type=int, default=None)
-    parser.add_argument("--lora-alpha", type=int, default=None)
-    parser.add_argument("--lora-dropout", type=float, default=None)
-    
-    # Extended: specify config files
-    parser.add_argument("--config-lora", type=str, default=None,
-                        help="Path to a custom lora_config.json")
-    parser.add_argument("--config-training", type=str, default=None,
-                        help="Path to a custom training_config.json")
-
-    # Basic training overrides
-    parser.add_argument("--epochs", type=int, default=None)
-    parser.add_argument("--learning-rate", type=float, default=None)
-
+    parser.add_argument(
+        "--lora-config-file",
+        type=str,
+        required=True,
+        help="Path to the LoRA config JSON (e.g., src/models/config/lora_config.json)"
+    )
+    parser.add_argument(
+        "--training-config-file",
+        type=str,
+        required=True,
+        help="Path to the training config JSON (e.g., src/models/config/training_config.json)"
+    )
     return parser.parse_args()
 
-def load_lora_config(config_path: str) -> dict:
-    if not config_path:
-        return {}
-    path = Path(config_path)
-    if not path.exists():
-        logger.warning(f"Provided LoRA config path does not exist: {path}")
-        return {}
-    with open(path, 'r') as f:
-        return json.load(f)
-
-def load_training_config(config_path: str) -> dict:
-    if not config_path:
-        return {}
-    path = Path(config_path)
-    if not path.exists():
-        logger.warning(f"Provided training config path does not exist: {path}")
-        return {}
-    with open(path, 'r') as f:
-        return json.load(f)
-
 def validate_dataset_path(dataset_path: str) -> Optional[Path]:
+    """
+    Verify that the dataset path exists and has the expected splits and columns.
+    Requires ['text', 'labels', 'id', 'original_id'] in each of train/validation/test.
+    """
     path = Path(dataset_path)
     if not path.exists():
         logger.error(f"Dataset path does not exist: {path}")
         return None
-        
+
     required_items = ["dataset_dict.json", "train", "validation", "test"]
     missing_items = [item for item in required_items if not (path / item).exists()]
     if missing_items:
         logger.error(f"Dataset at {path} is missing required items: {missing_items}")
         return None
-    
+
     dataset = load_from_disk(str(path))
     required_columns = ["text", "labels", "id", "original_id"]
     for split_name in ["train", "validation", "test"]:
@@ -84,12 +64,15 @@ def validate_dataset_path(dataset_path: str) -> Optional[Path]:
         for col in required_columns:
             if col not in split_cols:
                 logger.error(
-                    f"Dataset split '{split_name}' lacks '{col}'. Found columns: {split_cols}"
+                    f"Dataset split '{split_name}' lacks required column '{col}'. "
+                    f"Found columns: {split_cols}"
                 )
                 return None
+
     return path
 
-def verify_environment():
+def verify_environment() -> bool:
+    """Check essential packages and versions to ensure compatibility."""
     try:
         import pkg_resources
         requirements = {
@@ -101,71 +84,77 @@ def verify_environment():
             installed = pkg_resources.get_distribution(package).version
             if pkg_resources.parse_version(installed) < pkg_resources.parse_version(min_version):
                 logger.warning(
-                    f"{package} version {installed} is installed, but {min_version} or higher is recommended."
+                    f"{package} version {installed} is installed, "
+                    f"but {min_version} or higher is recommended."
                 )
         return True
     except Exception as e:
         logger.error(f"Environment verification failed: {e}")
         return False
 
+def load_config_or_fail(config_path: str, config_type: str) -> dict:
+    """
+    Load a JSON config from the provided path.
+    If not found or invalid, log an error and exit immediately.
+    """
+    path = Path(config_path)
+    if not path.exists():
+        logger.error(f"{config_type} not found at: {config_path}")
+        exit(1)
+    try:
+        with open(path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load {config_type} from {config_path}: {e}")
+        exit(1)
+
 def main():
     args = parse_args()
-    
+
+    # 1. Environment check
     if not verify_environment():
-        logger.error("Environment verification failed. Please check your dependencies.")
+        logger.error("Environment verification failed. Terminating.")
         return 1
-    
+
+    # 2. Dataset validation
     dataset_path = validate_dataset_path(args.dataset_path)
     if dataset_path is None:
+        logger.error("Dataset path validation failed. Terminating.")
         return 1
 
-    # Load config files if specified
-    lora_config_dict = load_lora_config(args.config_lora)
-    training_config_dict = load_training_config(args.config_training)
+    # 3. Load configs
+    lora_config = load_config_or_fail(args.lora_config_file, "LoRA config")
+    training_config = load_config_or_fail(args.training_config_file, "Training config")
 
-    # Merge partial CLI overrides into the LoRA config
-    if args.lora_rank is not None:
-        lora_config_dict["r"] = args.lora_rank
-    if args.lora_alpha is not None:
-        lora_config_dict["lora_alpha"] = args.lora_alpha
-    if args.lora_dropout is not None:
-        lora_config_dict["lora_dropout"] = args.lora_dropout
-    if lora_config_dict:
-        # ensure essential fields
-        lora_config_dict.setdefault("bias", "none")
-        lora_config_dict.setdefault("task_type", "SEQ_CLS")
-
-    # Merge CLI overrides into training config
-    if args.epochs is not None:
-        training_config_dict["num_train_epochs"] = args.epochs
-    if args.learning_rate is not None:
-        training_config_dict["learning_rate"] = args.learning_rate
-
-    logger.info(f"Initializing DeBERTa trainer with model: {args.model_name}")
+    # 4. Initialize trainer
     try:
         trainer = DebertaTrainer(
             dataset_path=str(dataset_path),
-            model_name=args.model_name,
-            lora_config=lora_config_dict if lora_config_dict else None,
-            training_config=training_config_dict if training_config_dict else None
+            lora_config=lora_config,
+            training_config=training_config
         )
-        
-        logger.info("Starting training...")
-        result = trainer.train()
-        
-        if result["status"] == "success":
-            logger.info("Training completed successfully!")
-            logger.info(f"Model saved to: {result['model_path']}")
-            logger.info("Test metrics:")
-            for metric, value in result["test_metrics"].items():
-                logger.info(f"  {metric}: {value:.4f}")
-            return 0
-        else:
-            logger.error(f"Training failed: {result['message']}")
-            return 1
-            
     except Exception as e:
-        logger.exception("Unexpected error during training")
+        logger.exception(f"Failed to initialize trainer: {e}")
+        return 1
+
+    # 5. Train
+    logger.info("Starting training...")
+    try:
+        result = trainer.train()
+    except Exception as e:
+        logger.exception(f"Error during training: {e}")
+        return 1
+
+    # 6. Check training result
+    if result["status"] == "success":
+        logger.info("Training completed successfully!")
+        logger.info(f"Model saved to: {result['model_path']}")
+        logger.info("Test metrics:")
+        for metric, value in result["test_metrics"].items():
+            logger.info(f"  {metric}: {value:.4f}")
+        return 0
+    else:
+        logger.error(f"Training failed: {result['message']}")
         return 1
 
 if __name__ == "__main__":
