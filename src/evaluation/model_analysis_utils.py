@@ -41,69 +41,105 @@ class ModelAnalyzer:
             raise ValueError(f"Invalid JSON format in file: {self.results_path}")
 
     def detect_anomalous_models(self, 
-                              threshold_std: float = 2.0,
-                              min_metric_threshold: float = 0.1,
-                              min_mcc_threshold: float = 0.2) -> List[Dict]:
+                                threshold_std: float = 2.0,
+                                min_metric_threshold: float = 0.1,
+                                min_mcc_threshold: float = 0.2,
+                                high_accuracy_threshold: float = 0.8,
+                                suspicious_accuracy_threshold: float = 0.95,
+                                max_allowed_precision_recall_gap: float = 0.5
+                                ) -> List[Dict]:
         """
-        Detect models with suspicious performance patterns.
-        
+        Detect models with suspicious performance patterns, adding extra checks
+        to catch questionable cases more thoroughly.
+
         Args:
             threshold_std (float): Standard deviation threshold for anomaly detection
-            min_metric_threshold (float): Minimum acceptable metric value
+            min_metric_threshold (float): Minimum acceptable metric value for accuracy/F1
             min_mcc_threshold (float): Minimum acceptable Matthews Correlation Coefficient
-            
+            high_accuracy_threshold (float): Accuracy threshold for checking mismatch with MCC
+            suspicious_accuracy_threshold (float): Accuracy threshold for potential overfitting
+            max_allowed_precision_recall_gap (float): Maximum acceptable gap between precision and recall
+
         Returns:
             List[Dict]: List of anomalous models and their issues
         """
         anomalies = []
         results_df = pd.DataFrame(self.results['results'])
-        
+
+        # Gather distribution info to detect near-constant predictions
+        # (e.g., if accuracy ~ largest class proportion but MCC/F1 are very low)
+        distribution = self.results['metadata']['dataset_info']['label_distribution']
+        total_samples = self.results['metadata']['dataset_info']['num_samples']
+        largest_class_count = max(distribution.values())
+        largest_class_proportion = largest_class_count / total_samples
+
         for model in self.results['results']:
             issues = []
             metrics = {k: v for k, v in model.items() if k in self.metrics_of_interest}
             
-            # Check for suspicious MCC patterns
             mcc = model.get('eval_matthews_correlation', 0)
             accuracy = model.get('eval_accuracy', 0)
+            f1_score = model.get('eval_f1', 0)
+            precision = model.get('eval_precision', 0)
+            recall = model.get('eval_recall', 0)
             
-            # Detect potential constant predictions
+            # 1. Very low MCC check
             if abs(mcc) < min_mcc_threshold:
                 issues.append(
-                    f"Very low Matthews Correlation ({mcc:.3f}) despite accuracy of {accuracy:.3f} "
-                    "- model might be making constant predictions"
+                    f"Very low MCC ({mcc:.3f}) with accuracy {accuracy:.3f} - could be near-constant predictions"
                 )
             
-            # Detect suspiciously high accuracy with low MCC
-            if accuracy > 0.8 and mcc < 0.4:
+            # 2. High accuracy but low MCC check
+            if accuracy > high_accuracy_threshold and mcc < 0.4:
                 issues.append(
-                    f"High accuracy ({accuracy:.3f}) but low Matthews Correlation ({mcc:.3f}) "
-                    "- might be exploiting dataset imbalance"
+                    f"Accuracy {accuracy:.3f} vs. MCC {mcc:.3f} mismatch - model may be exploiting imbalance"
                 )
             
-            # Original checks
-            if model['eval_accuracy'] < min_metric_threshold:
-                issues.append(f"Very low accuracy: {model['eval_accuracy']:.3f}")
+            # 3. Very low accuracy check
+            if accuracy < min_metric_threshold:
+                issues.append(f"Very low accuracy: {accuracy:.3f}")
             
-            # Check for suspicious metric patterns
+            # 4. Very low F1 check
+            if f1_score < min_metric_threshold:
+                issues.append(f"Very low F1 score: {f1_score:.3f}")
+            
+            # 5. Suspicious outlier detection by standard deviation
             metric_values = np.array(list(metrics.values()))
-            metric_std = np.std(metric_values)
-            metric_mean = np.mean(metric_values)
+            if len(metric_values) >= 2:  # Only valid if we have at least two metrics
+                metric_std = np.std(metric_values)
+                metric_mean = np.mean(metric_values)
+                # Avoid division by zero if std is extremely small
+                if metric_std > 0:
+                    for metric, value in metrics.items():
+                        z_score = abs(value - metric_mean) / metric_std
+                        if z_score > threshold_std:
+                            issues.append(
+                                f"Suspicious {metric}={value:.3f} (z-score={z_score:.2f} from mean={metric_mean:.3f})"
+                            )
             
-            # Detect outliers
-            for metric, value in metrics.items():
-                z_score = abs(value - metric_mean) / metric_std
-                if z_score > threshold_std:
-                    issues.append(f"Suspicious {metric}: {value:.3f} (z-score: {z_score:.2f})")
+            # 6. Check for suspiciously high accuracy (potential overfitting)
+            if accuracy > suspicious_accuracy_threshold:
+                issues.append(
+                    f"Suspiciously high accuracy ({accuracy:.3f}) - check for data leakage or overfitting"
+                )
             
-            # Check for perfect or near-perfect scores
-            if model['eval_accuracy'] > 0.95:  # Lowered from 0.99 to be more sensitive
-                issues.append(f"Suspiciously high accuracy ({model['eval_accuracy']:.3f}) - check for dataset bias")
+            # 7. Check for near-constant prediction:
+            #    If accuracy is close to largest_class_proportion, but MCC and F1 are very low
+            if (abs(accuracy - largest_class_proportion) < 0.05
+                and mcc < 0.1
+                and f1_score < 0.2):
+                issues.append(
+                    "Accuracy close to majority class proportion with low MCC/F1 - possible constant predictions"
+                )
+            
+            # 8. Check for large gap between precision and recall
+            if abs(precision - recall) > max_allowed_precision_recall_gap:
+                issues.append(
+                    f"Large gap between precision ({precision:.3f}) and recall ({recall:.3f})"
+                )
             
             if issues:
-                anomalies.append({
-                    'model_name': model['model_name'],
-                    'issues': issues
-                })
+                anomalies.append({'model_name': model['model_name'], 'issues': issues})
         
         return anomalies
 
@@ -121,10 +157,10 @@ class ModelAnalyzer:
         )
 
     def generate_research_table(self, 
-                              metrics: List[str] = None,
-                              format_type: str = 'grid',
-                              save_to_file: bool = True,
-                              decimal_places: int = 3) -> str:
+                                metrics: List[str] = None,
+                                format_type: str = 'grid',
+                                save_to_file: bool = True,
+                                decimal_places: int = 3) -> Tuple[str, Path]:
         """
         Generate a research-friendly table of model comparisons.
         
@@ -135,7 +171,7 @@ class ModelAnalyzer:
             decimal_places (int): Number of decimal places for numeric values
             
         Returns:
-            str: Formatted table string
+            Tuple[str, Path]: Formatted table string and output directory path
         """
         if metrics is None:
             metrics = [
@@ -155,12 +191,17 @@ class ModelAnalyzer:
             for metric in metrics:
                 value = result.get(metric, 0)
                 # Ensure consistent decimal places for all numeric values
-                row.append(f"{float(value):.{decimal_places}f}" if isinstance(value, (int, float)) else value)
+                if isinstance(value, (int, float)):
+                    row.append(f"{float(value):.{decimal_places}f}")
+                else:
+                    row.append(str(value))
             table_data.append(row)
         
         # Sort by combined metric if available, otherwise by accuracy
-        sort_metric_idx = (metrics.index('eval_combined_metric') + 1 
-                          if 'eval_combined_metric' in metrics else 1)
+        if 'eval_combined_metric' in metrics:
+            sort_metric_idx = metrics.index('eval_combined_metric') + 1
+        else:
+            sort_metric_idx = 1  # Fallback to the first metric in the list after model name
         table_data.sort(key=lambda x: float(x[sort_metric_idx]), reverse=True)
         
         table_str = tabulate(table_data, headers=headers, tablefmt=format_type)
@@ -174,7 +215,7 @@ class ModelAnalyzer:
             dataset_info = self.results['metadata']['dataset_info']
             dataset_info_path = output_dir / "dataset_info.txt"
             with open(dataset_info_path, 'w') as f:
-                f.write(f"Dataset Information:\n")
+                f.write("Dataset Information:\n")
                 f.write(f"Path: {dataset_info['path']}\n")
                 f.write(f"Hash: {dataset_info['hash']}\n")
                 f.write(f"Number of samples: {dataset_info['num_samples']}\n")
@@ -191,7 +232,30 @@ class ModelAnalyzer:
                 f.write(table_str)
                 logger.info(f"Saved analysis results to: {output_dir}")
         
-        return table_str
+        return table_str, output_dir
+
+    def save_anomalies_report(self, anomalies: List[Dict], output_dir: Path) -> None:
+        """
+        Save anomalies report to a markdown file.
+        
+        Args:
+            anomalies (List[Dict]): List of detected anomalies
+            output_dir (Path): Directory to save the report
+        """
+        if not anomalies:
+            return
+        
+        report_path = output_dir / "comparison_anomalies.md"
+        
+        with open(report_path, 'w') as f:
+            f.write("# Model Performance Anomalies Report\n\n")
+            f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            for anomaly in anomalies:
+                f.write(f"## {anomaly['model_name']}\n\n")
+                for issue in anomaly['issues']:
+                    f.write(f"- {issue}\n")
+                f.write("\n")
 
 def analyze_comparison_file(file_name: str, formats: List[str] = None):
     """
@@ -202,7 +266,7 @@ def analyze_comparison_file(file_name: str, formats: List[str] = None):
         formats (List[str]): List of output formats to generate
     """
     if formats is None:
-        formats = ['grid']  # Default to just grid format
+        formats = ['grid']
         
     try:
         analyzer = ModelAnalyzer(file_name)
@@ -223,15 +287,17 @@ def analyze_comparison_file(file_name: str, formats: List[str] = None):
             print("No suspicious model performances detected.")
         
         # Generate and save tables in requested formats
+        output_dir = None
         for fmt in formats:
             print(f"\n=== Model Performance Comparison ({fmt.upper()}) ===")
-            table = analyzer.generate_research_table(format_type=fmt, save_to_file=True)
+            table, output_dir = analyzer.generate_research_table(format_type=fmt, save_to_file=True)
             print(table)
+        
+        # Save anomalies report if anomalies were detected and we have an output directory
+        if anomalies and output_dir:
+            analyzer.save_anomalies_report(anomalies, output_dir)
+            logger.info(f"Saved anomalies report to: {output_dir / 'comparison_anomalies.md'}")
         
     except Exception as e:
         logger.error(f"Error analyzing comparison file: {str(e)}")
         raise
-
-if __name__ == "__main__":
-
-    analyze_comparison_file("model_comparison_20250107_124451.json") 
