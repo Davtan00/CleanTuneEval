@@ -83,7 +83,7 @@ class DatasetManager:
             }
         elif format_type == "sequence_classification":
             dataset_dict = {
-                'input_text': reviews_df['clean_text'].tolist(),
+                'text': reviews_df['clean_text'].tolist(),
                 'label': reviews_df['sentiment'].tolist(),
                 'id': reviews_df['id'].tolist(),
                 'original_id': reviews_df['original_id'].tolist()

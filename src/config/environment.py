@@ -133,3 +133,25 @@ class HardwareConfig:
         logger.info("MPS Known Limitations:")
         for feature, limitation in limitations.items():
             logger.info(f"- {feature}: {limitation}")
+    
+    def get_optimal_batch_size(self, model_name: str) -> int:
+        """Determine optimal batch size based on model and hardware."""
+        if "large" in model_name.lower():
+            return max(1, self.memory_limit // 8)
+        elif "base" in model_name.lower():
+            return max(2, self.memory_limit // 4)
+        else:
+            return max(4, self.memory_limit // 2)
+    
+    def cleanup_memory(self, model=None):
+        """Unified memory cleanup across different devices."""
+        if model is not None:
+            model.cpu()
+            del model
+            
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            torch.mps.empty_cache()
+            import time
+            time.sleep(0.1)  # Brief pause for MPS cleanup
