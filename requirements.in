@@ -31,7 +31,6 @@ pytest>=8.0.0
 httpx>=0.26.0
 
 # Monitoring and Logging
-#wandb>=0.16.2
 loguru>=0.7.2
 
 # Type Checking
@@ -39,3 +38,4 @@ pydantic>=2.6.1
 
 # Additional Requirements
 tqdm>=4.65.0
+python-dotenv>=1.0.1
