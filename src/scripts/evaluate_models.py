@@ -15,52 +15,14 @@ from typing import Dict, Any
 import torch.cuda
 from sklearn.metrics import balanced_accuracy_score, matthews_corrcoef
 import warnings
-import time
-from dotenv import load_dotenv
-from huggingface_hub import snapshot_download
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-HF_TOKEN = os.getenv('HUGGINGFACE_TOKEN')
-
-def ensure_model_downloaded(model_name: str) -> Path:
-    """Safely download and verify model files."""
-    cache_dir = Path("model_cache") / model_name.replace("/", "_")
-    
-    try:
-        # Download with verification
-        snapshot_download(
-            repo_id=model_name,
-            cache_dir=cache_dir,
-            token=HF_TOKEN,
-            ignore_patterns=["*.msgpack", "*.h5", "*.safetensors"],
-            local_files_only=False,
-            revision="main"
-        )
-        return cache_dir
-    except Exception as e:
-        logger.error(f"Failed to download model {model_name}: {str(e)}")
-        raise
-
 def evaluate_single_model(model_name_or_path, tokenizer_name_or_path, test_dataset, compute_metrics_fn, label2id, device):
     """Evaluate a single Hugging Face model, using known metrics from DebertaTrainer."""
-    
-    # Ensure model is downloaded first
-    try:
-        model_path = ensure_model_downloaded(model_name_or_path)
-        tokenizer_path = ensure_model_downloaded(tokenizer_name_or_path)
-    except Exception as e:
-        logger.error(f"Failed to prepare model/tokenizer: {str(e)}")
-        raise
-
-    logger.info(f"Loading tokenizer from: {tokenizer_path}")
-    eval_tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path,
-        trust_remote_code=True,
-        token=HF_TOKEN
-    )
+    logger.info(f"Loading tokenizer for: {tokenizer_name_or_path}")
+    eval_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, trust_remote_code=True)
     
     # Ensure tokenizer has a valid pad token
     if eval_tokenizer.pad_token_id is None:
@@ -91,26 +53,13 @@ def evaluate_single_model(model_name_or_path, tokenizer_name_or_path, test_datas
     )
     model_test.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
-    logger.info(f"Loading model from: {model_path}")
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            model = AutoModelForSequenceClassification.from_pretrained(
-                model_path,
-                num_labels=3,
-                label2id=label2id,
-                trust_remote_code=True,
-                token=HF_TOKEN,
-                revision="main",
-                timeout=60
-            )
-            break
-        except Exception as e:
-            if attempt == max_retries - 1:
-                logger.error(f"Failed to load model after {max_retries} attempts: {str(e)}")
-                raise
-            logger.warning(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
-            time.sleep(2 ** attempt)
+    logger.info(f"Loading model checkpoint from: {model_name_or_path}")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name_or_path,
+        num_labels=3,
+        label2id=label2id,
+        trust_remote_code=True
+    )
 
     if model.config.pad_token_id is None:
         model.config.pad_token_id = eval_tokenizer.pad_token_id
@@ -249,17 +198,9 @@ def main():
             "model_path": "bert-base-chinese",
             "tokenizer_path": "bert-base-chinese"
         },
-        "phi-2": {
-           "model_path": "microsoft/phi-2",
-           "tokenizer_path": "microsoft/phi-2"
-        },
         "xlm-roberta-base": {
             "model_path": "xlm-roberta-base",
             "tokenizer_path": "xlm-roberta-base"
-        },
-        "albert-base-v2": {
-            "model_path": "albert-base-v2",
-            "tokenizer_path": "albert-base-v2"
         },
         "cardiffnlp/twitter-roberta-base-sentiment-latest": {
             "model_path": "cardiffnlp/twitter-roberta-base-sentiment-latest",
@@ -355,3 +296,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

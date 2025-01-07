@@ -170,3 +170,4 @@ generalData.json
 /src/models/storage
 /wandb
 /src/evaluation/storage
+/src/evaluation/results
