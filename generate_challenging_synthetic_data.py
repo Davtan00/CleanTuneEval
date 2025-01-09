@@ -11,7 +11,8 @@ from transformers import (
     RobertaForSequenceClassification,
     TrainingArguments,
     Trainer,
-    pipeline
+    pipeline,
+    EarlyStoppingCallback  # CHANGE: Added EarlyStoppingCallback
 )
 from peft import LoraConfig, get_peft_model, TaskType
 
@@ -267,7 +268,7 @@ def main():
     random.seed(42)
     
     # Load original data
-    json_path = os.path.join(os.path.dirname(__file__), "syn_reviews.json")
+    json_path = os.path.join(os.path.dirname(__file__), "HC_Jan.json")
     all_reviews = read_json_reviews(json_path)
     
     print("\n=== ORIGINAL REVIEW EXAMPLE ===")
@@ -323,6 +324,7 @@ def main():
 
     lora_model = create_lora_model(base_model)
 
+   
     training_args = TrainingArguments(
         output_dir="lora_roberta_output",
         evaluation_strategy="epoch",
@@ -336,7 +338,11 @@ def main():
         logging_dir="lora_logs",
         load_best_model_at_end=True,
         metric_for_best_model="f1_weighted",
-        greater_is_better=True
+        greater_is_better=True,
+        use_mps_device=torch.backends.mps.is_available(),  
+        bf16=torch.backends.mps.is_available(),            
+        lr_scheduler_type="cosine",                       
+        warmup_ratio=0.1                                 
     )
 
     trainer = Trainer(
@@ -345,7 +351,8 @@ def main():
         train_dataset=tokenized_dsets["train"],
         eval_dataset=tokenized_dsets["validation"],
         tokenizer=tokenizer,
-        compute_metrics=compute_metrics
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=1)] 
     )
 
     trainer.train()
@@ -353,9 +360,8 @@ def main():
     results = trainer.evaluate(tokenized_dsets["test"])
     print("Test Results:", results)
 
-    
-    trainer.save_model("lora_roberta_output/final_model")
-    tokenizer.save_pretrained("lora_roberta_output/final_model")
+    trainer.save_model("lora_roberta_output/early_stopping_final_model")
+    tokenizer.save_pretrained("lora_roberta_output/early_stopping_final_model")
 
 
 if __name__ == "__main__":
