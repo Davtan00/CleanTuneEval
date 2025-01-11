@@ -5,7 +5,12 @@ import random
 import numpy as np
 from typing import Dict, Any
 from datasets import Dataset
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_recall_fscore_support,
+    confusion_matrix
+)
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from peft import PeftModel
 from tqdm import tqdm
@@ -66,39 +71,35 @@ def load_test_dataset(json_path: str):
     return hf_dataset
 
 ###############################################################################
-# 2) EVALUATION FUNCTION
+# 2) EVALUATION FUNCTION (EXTENDED METRICS)
 ###############################################################################
 def evaluate_model(
-    model, 
-    tokenizer, 
-    dataset, 
-    batch_size=16, 
-    aggregator_type=None
+    model,
+    tokenizer,
+    dataset,
+    batch_size=16,
+    aggregator_type=None,
+    model_name_for_logging="model"
 ):
     """
-    Runs inference on 'dataset' (with "text", "label") in batches 
-    and returns accuracy & weighted F1.
+    Runs inference on 'dataset' in batches, returns an extended metrics dict:
+      - accuracy
+      - precision_macro, recall_macro, f1_macro
+      - f1_weighted
+      - confusion_matrix
 
-    'aggregator_type' can be:
-      - None / "3-class": No aggregator. Model natively outputs 3 classes (neg/neu/pos).
-      - "nlp5_simple": For 'nlptown/bert-base-multilingual-uncased-sentiment' (5 classes),
-        we do a simpler aggregator:
-            1 star => negative
-            5 star => positive
-            else   => neutral
-      - "tabular5": For tabularisai (5 classes: 0=Very Neg,1=Neg,2=Neu,3=Pos,4=Very Pos)
-        negative = 0 or 1
-        neutral  = 2
-        positive = 3 or 4
+    Also aggregates 5->3 classes if aggregator_type is 'nlp5_simple' or 'tabular5',
+    and saves confusion matrix as JSON: "confusion_<model_name_for_logging>.json"
     """
     model.eval()
+
     all_labels = []
     all_preds = []
 
     data_list = list(dataset)
     device = next(model.parameters()).device
 
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Evaluating"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc=f"Evaluating {model_name_for_logging}"):
         batch = data_list[i : i + batch_size]
         texts = [x["text"] for x in batch]
         labels = [x["label"] for x in batch]
@@ -110,52 +111,73 @@ def evaluate_model(
 
         with torch.no_grad():
             outputs = model(**inputs)
+
         logits = outputs.logits
 
+        # Handle aggregator logic for 5->3 classes if needed
         if aggregator_type is None or aggregator_type == "3-class":
             # Normal scenario: model has 3-class output
-            preds = torch.argmax(logits, dim=-1).cpu().tolist()
+            preds_batch = torch.argmax(logits, dim=-1).cpu().tolist()
 
         elif aggregator_type == "nlp5_simple":
-            # This model outputs 5 classes (stars). We do a CRUDE aggregator:
-            #   class=0 => 1 star => negative
-            #   class=4 => 5 star => positive
-            #   everything else => neutral
-            pred_5 = torch.argmax(logits, dim=-1)  # 0..4
-            # Convert to our 3-class scheme
+            # Model outputs 5 classes (stars). CRUDE aggregator:
+            #   0 => 1 star => neg
+            #   4 => 5 star => pos
+            #   else => neutral
+            pred_5 = torch.argmax(logits, dim=-1)
             final_preds = []
             for p in pred_5.cpu().tolist():
-                if p == 0: 
-                    final_preds.append(0)  # negative
+                if p == 0:
+                    final_preds.append(0)
                 elif p == 4:
-                    final_preds.append(2)  # positive
+                    final_preds.append(2)
                 else:
-                    final_preds.append(1)  # neutral
-            preds = final_preds
+                    final_preds.append(1)
+            preds_batch = final_preds
 
         elif aggregator_type == "tabular5":
             # tabularisai: 5 classes (0=VeryNeg,1=Neg,2=Neu,3=Pos,4=VeryPos)
-            # Lump 0,1 => negative, 2 => neutral, 3,4 => positive
-            pred_5 = torch.argmax(logits, dim=-1)  # 0..4
+            pred_5 = torch.argmax(logits, dim=-1)
             final_preds = []
             for p in pred_5.cpu().tolist():
-                if p in [0,1]:
-                    final_preds.append(0) # negative
+                if p in [0, 1]:
+                    final_preds.append(0)
                 elif p == 2:
-                    final_preds.append(1) # neutral
+                    final_preds.append(1)
                 else:
-                    final_preds.append(2) # positive
-            preds = final_preds
+                    final_preds.append(2)
+            preds_batch = final_preds
 
         else:
-            # fallback: no aggregator
-            preds = torch.argmax(logits, dim=-1).cpu().tolist()
+            # fallback
+            preds_batch = torch.argmax(logits, dim=-1).cpu().tolist()
 
-        all_preds.extend(preds)
+        all_preds.extend(preds_batch)
 
+    # Compute extended metrics
     acc = accuracy_score(all_labels, all_preds)
+    # Macro P/R/F1
+    p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(all_labels, all_preds, average="macro")
+    # Weighted F1
     f1w = f1_score(all_labels, all_preds, average="weighted")
-    return {"accuracy": acc, "f1_weighted": f1w}
+
+    # Optionally confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+
+    # Save confusion matrix as JSON
+    cm_list = cm.tolist()
+    cm_filename = f"confusion_{model_name_for_logging}.json"
+    with open(cm_filename, "w", encoding="utf-8") as f:
+        json.dump({"confusion_matrix": cm_list}, f, indent=2)
+
+    return {
+        "accuracy": acc,
+        "precision_macro": p_macro,
+        "recall_macro": r_macro,
+        "f1_macro": f1_macro,
+        "f1_weighted": f1w,
+        "confusion_matrix_file": cm_filename  # So we know where it's stored
+    }
 
 ###############################################################################
 # 3) MAIN SCRIPT
@@ -194,7 +216,7 @@ def main():
         },
         # Bad LoRA
         {
-            "name": "LoRA Roberta",
+            "name": "LoRA Roberta (scraped)",
             "base_ckpt": "roberta-large",
             "lora_ckpt": "lora_roberta_scraped/final_model",
             "aggregator": None
@@ -242,14 +264,12 @@ def main():
 
         # If aggregator_type indicates 5-class, let it load default # classes
         if aggregator_type in ["nlp5_simple", "tabular5"]:
-            base_model = AutoModelForSequenceClassification.from_pretrained(
-                base_ckpt
-            )
+            base_model = AutoModelForSequenceClassification.from_pretrained(base_ckpt)
         else:
-            # Force 3 if needed, ignoring mismatch so it doesn't throw errors
+            # Force 3 if needed
             base_model = AutoModelForSequenceClassification.from_pretrained(
                 base_ckpt,
-                num_labels=3,
+                num_labels=3
             )
 
         tokenizer = AutoTokenizer.from_pretrained(base_ckpt)
@@ -267,13 +287,17 @@ def main():
             tokenizer=tokenizer,
             dataset=test_dataset,
             batch_size=16,
-            aggregator_type=aggregator_type
+            aggregator_type=aggregator_type,
+            model_name_for_logging=model_name.replace(" ", "_").lower()
         )
         print(f"Results for {model_name}:", metrics)
 
         results_data.append({
             "model_name": model_name,
             "accuracy": metrics["accuracy"],
+            "precision_macro": metrics["precision_macro"],
+            "recall_macro": metrics["recall_macro"],
+            "f1_macro": metrics["f1_macro"],
             "f1_weighted": metrics["f1_weighted"]
         })
 
@@ -282,7 +306,7 @@ def main():
         del base_model
         torch.cuda.empty_cache() if device.type == "cuda" else None
 
-    # E) Generate LaTeX table
+    # E) Generate LaTeX table with extended columns
     latex_table_path = "benchmark_results.tex"
     latex_table = create_latex_table(results_data)
     with open(latex_table_path, "w", encoding="utf-8") as f:
@@ -292,27 +316,46 @@ def main():
 
 def create_latex_table(results_data):
     """
-    Takes a list of dicts: [{"model_name":..., "accuracy":..., "f1_weighted":...}],
-    returns a LaTeX table
+    Takes a list of dicts:
+      [
+        {
+          "model_name": ...,
+          "accuracy": ...,
+          "precision_macro": ...,
+          "recall_macro": ...,
+          "f1_macro": ...,
+          "f1_weighted": ...
+        },
+        ...
+      ]
+    Returns a LaTeX table with columns for accuracy, precision_macro, recall_macro,
+    f1_macro, and f1_weighted.
     """
     header = (
         "\\begin{table}[ht]\n"
         "\\centering\n"
-        "\\begin{tabular}{lcc}\n"
+        "\\begin{tabular}{lccccc}\n"
         "\\hline\n"
-        "Model & Accuracy & F1 (Weighted) \\\\\n"
+        "Model & Acc & Prec(Macro) & Rec(Macro) & F1(Macro) & F1(Weighted) \\\\\n"
         "\\hline\n"
     )
 
     rows = []
     for r in results_data:
-        row = f"{r['model_name']} & {r['accuracy']:.3f} & {r['f1_weighted']:.3f} \\\\"
+        row = (
+            f"{r['model_name']} & "
+            f"{r['accuracy']:.3f} & "
+            f"{r['precision_macro']:.3f} & "
+            f"{r['recall_macro']:.3f} & "
+            f"{r['f1_macro']:.3f} & "
+            f"{r['f1_weighted']:.3f} \\\\"
+        )
         rows.append(row)
 
     footer = (
         "\\hline\n"
         "\\end{tabular}\n"
-        "\\caption{Benchmark results on reduced scraped reviews.}\n"
+        "\\caption{Extended benchmark results on reduced scraped reviews.}\n"
         "\\label{tab:benchmark_results}\n"
         "\\end{table}\n"
     )

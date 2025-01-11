@@ -20,7 +20,12 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 # For metrics
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_recall_fscore_support,
+    confusion_matrix
+)
 
 
 ##############################################################################
@@ -36,7 +41,7 @@ TRAIN_FRAC = 0.8
 VAL_FRAC = 0.1
 TEST_FRAC = 0.1
 
-# Local model for re-labeling unlabeled data (no OpenAI usage)
+# Local model for re-labeling unlabeled data
 LOCAL_SENTIMENT_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
 
 # Synonym replacements for text augmentation (healthcare oriented )
@@ -71,7 +76,6 @@ def load_ambiguous_phrases() -> List[str]:
         ]
 
 
-# Initialize ambiguous phrases from config
 AMBIGUOUS_PHRASES = load_ambiguous_phrases()
 
 
@@ -163,7 +167,6 @@ def replace_synonyms(text: str) -> str:
 def inject_ambiguity(text: str) -> str:
     """
     Randomly insert domain-specific ambiguous phrases to mimic uncertain or hedged language.
-    Phrases are loaded from domain_config/healthcare/ambiguous.json
     """
     words = text.split()
     idx = random.randint(0, len(words))
@@ -184,7 +187,7 @@ def augment_review_text(text: str) -> str:
 
 def build_augmented_dataset(labeled: List[Dict[str, Any]], unlabeled: List[Dict[str, Any]]) -> Dataset:
     """
-    Merge labeled + re-labeled data. For each review, keep original + augmented to diversify.
+    Merge labeled + re-labeled data. For each review, keep original + augmented.
     """
     combined = labeled + unlabeled
     augmented_entries = []
@@ -193,7 +196,7 @@ def build_augmented_dataset(labeled: List[Dict[str, Any]], unlabeled: List[Dict[
         orig_sent = r["sentiment"]
         orig_id = r["id"]
 
-        # Keep original example
+        # Original example
         augmented_entries.append({
             "text": orig_text,
             "sentiment": orig_sent,
@@ -231,7 +234,6 @@ def split_dataset(dataset: Dataset, train_frac=0.8, val_frac=0.1, test_frac=0.1,
 
 def map_sentiment_to_label(sent: str) -> int:
     """
-    Map string sentiments to integer labels for classification.
     negative=0, neutral=1, positive=2
     """
     mapping = {"negative": 0, "neutral": 1, "positive": 2}
@@ -246,19 +248,43 @@ def tokenize_function(examples, tokenizer):
         max_length=128
     )
 
-
+###############################################################################
+# ENHANCED METRICS FUNCTION
+###############################################################################
 def compute_metrics(eval_pred):
+    """
+    Return accuracy, precision/recall/F1 (macro + weighted), and confusion matrix.
+    """
     logits, labels = eval_pred
     preds = logits.argmax(axis=-1)
+
+    # Accuracy
     acc = accuracy_score(labels, preds)
-    f1w = f1_score(labels, preds, average="weighted")
-    return {"accuracy": acc, "f1_weighted": f1w}
+
+    # Precision, Recall, F1 (Macro + Weighted)
+    p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(labels, preds, average="macro")
+    p_weighted, r_weighted, f1_weighted, _ = precision_recall_fscore_support(labels, preds, average="weighted")
+
+    # Optionally, Confusion Matrix
+    cm = confusion_matrix(labels, preds)
+
+    # We can return them as numeric or store them as well
+    metrics_dict = {
+        "accuracy": acc,
+        "precision_macro": p_macro,
+        "recall_macro": r_macro,
+        "f1_macro": f1_macro,
+        "precision_weighted": p_weighted,
+        "recall_weighted": r_weighted,
+        "f1_weighted": f1_weighted,
+        "confusion_matrix": cm.tolist()
+    }
+    return metrics_dict
 
 
 def create_lora_model(base_model: RobertaForSequenceClassification):
     """
     Use recommended LoRA parameters for roberta-large, focusing on attention modules.
-     r=16, alpha=32, dropout=0.05, target_modules for 'query' & 'value'.
     """
     lora_config = LoraConfig(
         r=16,
@@ -276,7 +302,7 @@ def main():
     # ------------------------------------------------------------------------
     # PARSE COMMAND-LINE ARGUMENTS
     # ------------------------------------------------------------------------
-    parser = argparse.ArgumentParser(description="Augment or train data with LoRA and MPS.")
+    parser = argparse.ArgumentParser(description="Augment or train data with LoRA.")
     parser.add_argument(
         "--only_augment",
         action="store_true",
@@ -295,48 +321,41 @@ def main():
     )
     args = parser.parse_args()
 
-    # Sanity checks
     if args.only_augment and args.only_train:
         raise ValueError("Cannot specify both --only_augment and --only_train at the same time.")
 
     random.seed(42)
 
     # ------------------------------------------------------------------------
-    # 1) DATA AUGMENTATION & SAVING DATASET (if not only_train)
+    # 1) DATA AUGMENTATION & SAVING DATASET
     # ------------------------------------------------------------------------
     if not args.only_train:
-        # Load original data
         json_path = os.path.join(os.path.dirname(__file__), "HC_Jan.json")
         all_reviews = read_json_reviews(json_path)
 
         print("\n=== ORIGINAL REVIEW EXAMPLE ===")
         print(all_reviews[0]["text"])
 
-        # After synonym replacement
         print("\n=== AFTER SYNONYM REPLACEMENT ===")
         print(replace_synonyms(all_reviews[0]["text"]))
 
-        # After ambiguity injection
         print("\n=== AFTER AMBIGUITY INJECTION ===")
         print(inject_ambiguity(all_reviews[0]["text"]))
 
-        # Full augmentation
         print("\n=== AFTER FULL AUGMENTATION ===")
         print(augment_review_text(all_reviews[0]["text"]))
 
-        # Partition into labeled & unlabeled
+        # Partition
         labeled_reviews, unlabeled_reviews = partition_reviews(all_reviews)
-
-        # Re-label the unlabeled portion with a local model
         unlabeled_reviews = local_relabel(unlabeled_reviews)
 
         # Build augmented dataset
         dataset = build_augmented_dataset(labeled_reviews, unlabeled_reviews)
 
-        # Split into train/val/test
+        # Split
         dset_dict = split_dataset(dataset, TRAIN_FRAC, VAL_FRAC, TEST_FRAC)
 
-        # Convert sentiment strings to numeric labels
+        # Convert sentiment strings -> numeric labels
         def label_map_fn(example):
             example["labels"] = map_sentiment_to_label(example["sentiment"])
             return example
@@ -353,23 +372,18 @@ def main():
         tokenized_dsets = tokenized_dsets.remove_columns(["text", "sentiment", "id"])
         tokenized_dsets.set_format("torch")
 
-        # Save dataset to disk
         output_dir = "lora_roberta_output"
         os.makedirs(output_dir, exist_ok=True)
         tokenized_dsets.save_to_disk(os.path.join(output_dir, "processed_dataset"))
 
         print(f"\nAugmented dataset saved to: {os.path.join(output_dir, 'processed_dataset')}")
 
-        # If the user wants only augmentation, exit now
         if args.only_augment:
-            print("Only augmentation was requested; exiting now.")
+            print("Only augmentation requested; exiting.")
             return
 
-        # Otherwise, proceed to training with the newly created dataset
         dataset_path = os.path.join(output_dir, "processed_dataset")
     else:
-        # If only_train is set, we skip augmentation entirely
-        # and load the dataset from --dataset_path
         dataset_path = args.dataset_path
 
     # ------------------------------------------------------------------------
@@ -407,19 +421,22 @@ def main():
         train_dataset=tokenized_dsets["train"],
         eval_dataset=tokenized_dsets["validation"],
         tokenizer=RobertaTokenizer.from_pretrained("roberta-large"),
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics, 
         callbacks=[EarlyStoppingCallback(early_stopping_patience=1)]
     )
 
     trainer.train()
 
     results = trainer.evaluate(tokenized_dsets["test"])
-    print("Test Results:", results)
+    print("\n=== Test Results ===")
+    for k, v in results.items():
+        print(f"{k}: {v}")
 
     trainer.save_model("lora_roberta_output/final_model")
     tokenizer = RobertaTokenizer.from_pretrained("roberta-large")
-    tokenizer.save_pretrained("lora_roberta_output/final_model")
-    print("\nModel and tokenizer saved to lora_roberta_output/final_model")
+    tokenizer.save_pretrained("lora_roberta_output/hq_model")
+
+    print("\nModel and tokenizer saved to lora_roberta_output/hq_model")
 
 
 if __name__ == "__main__":
