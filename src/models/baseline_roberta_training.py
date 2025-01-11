@@ -122,12 +122,17 @@ def main():
     
     tokenized_datasets = {}
     for split in dataset.keys():
+        # First tokenize the texts
         tokenized_datasets[split] = dataset[split].map(
             tokenize_function, 
             batched=True,
-            remove_columns=dataset[split].column_names
+            remove_columns=[col for col in dataset[split].column_names if col not in ['labels']]  
         )
-        tokenized_datasets[split].set_format('torch')
+        # Set the format to PyTorch tensors
+        tokenized_datasets[split].set_format(
+            type='torch',
+            columns=['input_ids', 'attention_mask', 'labels']  
+        )
     
     # Setup training arguments and trainer
     training_args = get_training_args(device, str(output_dir))
