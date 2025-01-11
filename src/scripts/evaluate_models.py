@@ -156,7 +156,7 @@ def calculate_additional_metrics(metrics: Dict[str, float]) -> Dict[str, float]:
 
 def main():
     # 1. Load the dataset from disk
-    dataset_path = "src/data/datasets/technology_18k_20250106_095813"
+    dataset_path = "src/data/datasets/healthcare_46k_20250107_131545"
     dataset_dict = load_from_disk(dataset_path)
     test_dataset = dataset_dict["test"]
 

@@ -172,3 +172,5 @@ generalData.json
 /src/evaluation/storage
 /src/evaluation/results
 /full_roberta_output
+/lora_roberta_output
+/lora_roberta_scraped
